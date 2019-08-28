@@ -6,11 +6,11 @@ program vegas_main
    integer :: n_dim, n_iter, n_events
    real(dp) :: res, sigma
 
-   n_dim = 3
+   n_dim = 6
    n_iter = 10
-   n_events = 1d5
+   n_events = 1d6
 
-   call vegas(lepage_test, n_dim, n_iter, n_events, res, sigma)
+   call vegas(lepage_test, .true., n_dim, n_iter, n_events, res, sigma)
 
    print *, "integral total is: ", res, "+/-", sigma
 
