@@ -226,9 +226,3 @@ module vegas_mod
 
       end subroutine
 end module vegas_mod
-
-
-
-
-
-

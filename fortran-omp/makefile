@@ -36,7 +36,7 @@ else
 endif
 
 
-.PHONY: all clean dirs
+.PHONY: all clean dirs run
 
 
 $(OBJDIR)/%.o: %.f90 | dirs
@@ -47,15 +47,19 @@ $(OBJDIR)/%.o: %.f90 | $(MODFILES) dirs
 	@echo "Building: $<"
 	@$(FC) $(FFLAGS) -c $< -o $@
 
-all: $(MODFILES) $(OBJFILES)
+$(EXECUTABLEPATH): $(MODFILES) $(OBJFILES)
 	@echo "Linking into: $(EXECUTABLEPATH)"
 	@$(LD) -o $(EXECUTABLEPATH) $^ $(FFLAGS) $(LDFLAGS)
 
+all: $(EXECUTABLEPATH)
 
 dirs: $(OBJDIR) $(MODDIR) $(BINDIR)
 
 $(OBJDIR) $(MODDIR) $(BINDIR):
 	@mkdir -p $@
+
+run: $(EXECUTABLEPATH)
+	$(EXECUTABLEPATH)
 
 clean:
 	@echo "Cleaning obj, mod and bin folders"
