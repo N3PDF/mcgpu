@@ -42,10 +42,11 @@ if __name__ == '__main__':
     ncalls = setup['ncalls']
     xlow = setup['xlow']
     xupp = setup['xupp']
+    dim = setup['dim']
 
     print(f'Plain MC pure python, ncalls={ncalls}:')
     start = time.time()
-    r = plain(dim=1, xl=xlow, xu=xupp, calls=ncalls)
+    r = plain(dim=dim, xl=xlow, xu=xupp, calls=ncalls)
     end = time.time()
     print(r)
     print(f'time (s): {end-start}')

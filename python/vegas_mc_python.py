@@ -230,10 +230,11 @@ if __name__ == '__main__':
     ncalls = setup['ncalls']
     xlow = setup['xlow']
     xupp = setup['xupp']
+    dim = setup['dim']
 
     print(f'VEGAS MC stage=0 python, ncalls={ncalls}:')
     start = time.time()
-    v = make_vegas(dim=1)
+    v = make_vegas(dim=dim)
     r = v.integrate(xl=xlow, xu=xupp, calls=ncalls, stage=0)
     end = time.time()
     print(r)
