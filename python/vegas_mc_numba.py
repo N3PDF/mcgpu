@@ -25,21 +25,6 @@ def random_point(x, sbin, dim, box, bins, xl, delx, sxi):
     return vol
 
 
-@nb.njit(nb.types.Tuple((nb.float64,nb.int64))(nb.int64,nb.float64[:],nb.float64[:],nb.float64[:],nb.float64[:,:]))
-def initialize_grid(dim, xl, xu, sdelx, sxi):
-    """Initialize grid"""
-    vol = 1
-    sbins = 1
-    for j in range(dim):
-        dx = xu[j] - xl[j]
-        sdelx[j] = dx
-        vol *= dx
-        sxi[0,j] = 0
-        sxi[1,j] = 1
-    svol = vol
-    return svol, sbins
-
-
 @nb.njit(nb.int64(nb.int64,nb.int64,nb.int64,nb.float64[:,:],nb.float64[:]))
 def resize_grid(dim, sbins, bins, sxi, sxin):
     """Resize grid maintaining the density distribution"""
@@ -67,26 +52,6 @@ def resize_grid(dim, sbins, bins, sxi, sxin):
     return bins
 
 
-@nb.njit(nb.void(nb.int64,nb.int64,nb.float64[:,:]))
-def reset_grid_values(dim, bins, sd):
-    for i in range(bins):
-        for j in range(dim):
-            sd[i, j] = 0.0
-
-
-@nb.njit(nb.void(nb.int64,nb.int64[:]))
-def init_box_coord(dim, box):
-    for i in range(dim):
-        box[i] = 0
-
-
-@nb.njit(nb.void(nb.int64,nb.float64[:,:],nb.int64[:],nb.float64))
-def accumulate_distribution(dim, sd, sbin, y):
-    for j in range(dim):
-        i = sbin[j]
-        sd[i, j] += y
-
-
 @nb.njit(nb.int64(nb.int64,nb.int64[:],nb.int64))
 def change_box_coord(dim, box, boxes):
     j = dim - 1
@@ -105,13 +70,12 @@ def change_box_coord(dim, box, boxes):
         nb.int64,nb.float64[:],nb.float64[:],nb.int64,nb.int64,
         nb.int64,nb.float64[:],nb.float64[:,:],nb.float64[:],nb.float64,
         nb.float64[:],nb.float64[:,:],nb.int64[:],nb.int64[:],nb.float64,
-        nb.int64,nb.float64,nb.int64,nb.float64,nb.float64,nb.float64
+        nb.int64,nb.float64,nb.int64,nb.float64
         )
     )
 def vegas(dim, xl, xu, calls, stage, sbins, sdelx,
           sxi, sxin, svol, sx, sd, sbox, sbin, sjac,
-          sboxes, ssum_wgts, ssamples, swtd_int_sum,
-          schi_sum, schisq):
+          sboxes, ssum_wgts, ssamples, swtd_int_sum):
 
     for i in range(dim):
         if xu[i] <= xl[i]:
@@ -120,7 +84,15 @@ def vegas(dim, xl, xu, calls, stage, sbins, sdelx,
             raise ValueError('are you really sure about the xu and xl?')
 
     if stage == 0:
-        svol, sbins = initialize_grid(dim, xl, xu, sdelx, sxi)
+        vol = 1
+        sbins = 1
+        for j in range(dim):
+            dx = xu[j] - xl[j]
+            sdelx[j] = dx
+            vol *= dx
+            sxi[0,j] = 0
+            sxi[1,j] = 1
+        svol = vol
 
     if stage == 1:
         ssum_wgts = 0
@@ -140,11 +112,14 @@ def vegas(dim, xl, xu, calls, stage, sbins, sdelx,
     iterations = 5
     for it in range(iterations):
         intgrl = 0
-        intgrl_sq = 0
         tss = 0
 
-        reset_grid_values(dim, sbins, sd)
-        init_box_coord(dim, sbox)
+        for i in range(sbins):
+            for j in range(dim):
+                sd[i, j] = 0.0
+
+        for i in range(dim):
+            sbox[i] = 0
 
         while True:
             m = 0
@@ -162,7 +137,11 @@ def vegas(dim, xl, xu, calls, stage, sbins, sdelx,
                 q += d * d * (k / (k + 1.0))
 
                 f_sq = fval * fval
-                accumulate_distribution(dim, sd, sbin, f_sq)
+
+                # accumulate distribution
+                for j in range(dim):
+                    i = sbin[j]
+                    sd[i, j] += f_sq
 
             intgrl += m * calls
             f_sq_sum = q * calls
@@ -180,28 +159,11 @@ def vegas(dim, xl, xu, calls, stage, sbins, sdelx,
         else:
             wgt = 0.0
 
-        intgrl_sq = intgrl * intgrl
-        sig = np.sqrt(var)
-
         if wgt > 0.0:
-            ssamples += 1
             ssum_wgts += wgt
             swtd_int_sum += intgrl * wgt
-            schi_sum += intgrl_sq * wgt
-
             cum_int = swtd_int_sum / ssum_wgts
             cum_sig = np.sqrt(1 / ssum_wgts)
-
-            if ssamples == 1:
-                schisq = 0
-            else:
-                m = 0
-                if ssum_wgts > 0:
-                    m = swtd_int_sum / ssum_wgts
-                q = intgrl - m
-                schisq *= (ssamples - 2.0)
-                schisq += (wgt / (1 + (wgt / ssum_wgts))) * q * q
-                schisq /= (ssamples - 1.0)
         else:
             cum_int += (intgrl - cum_int) / (it + 1.0)
             cum_sig = 0.0
@@ -227,14 +189,12 @@ class make_vegas:
         self.ssum_wgts = 0
         self.ssamples = 0
         self.swtd_int_sum = 0
-        self.schi_sum = 0
-        self.schisq = 0
 
     def integrate(self, xl, xu, calls, stage):
         r = vegas(self.dim, xl, xu, calls, stage,
                 self.sbins, self.sdelx, self.sxi, self.sxin, self.svol,
                 self.sx, self.sd, self.sbox, self.sbin, self.sjac, self.sboxes,
-                self.ssum_wgts, self.ssamples, self.swtd_int_sum, self.schi_sum, self.schisq)
+                self.ssum_wgts, self.ssamples, self.swtd_int_sum)
         self.svol = r[0]
         return r[1:]
 
