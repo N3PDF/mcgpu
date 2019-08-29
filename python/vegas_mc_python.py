@@ -32,8 +32,8 @@ def generate_random_array(n_dim, divisions, x, div_index):
     for i in range(n_dim):
         rn = internal_rand()
         # Get a random number randomly assigned to a subdivision
-        xn = 1.0 + BINS_MAX*(1.0 - rn)
-        int_xn = max(0, min(int(xn)-1, BINS_MAX))
+        xn = BINS_MAX*(1.0 - rn)
+        int_xn = max(0, min(int(xn), BINS_MAX))
         # In practice int_xn = int(xn)-1 unless xn < 1
         aux_rand = xn - int_xn
         if int_xn == 0:
@@ -78,6 +78,7 @@ def refine_grid(res_sq, subdivisions):
     rebin(rw, rc, subdivisions)
 
 def rebin(rw, rc, subdivisions):
+    """ broken from function above to use it for initialiation """
     k = -1
     dr = 0.0
     aux = []
@@ -112,10 +113,9 @@ def vegas(n_dim, n_iter, n_events):
     divisions = np.zeros( (n_dim, BINS_MAX) )
     divisions[:, 0] = 1.0
     # Do a fake initialization at the begining
-    tmp_sq = np.ones(BINS_MAX)
+    rw_tmp = np.ones(BINS_MAX)
     for subdivision in divisions:
-        #refine_grid(tmp_sq, subdivision)
-        rebin(tmp_sq, 1.0/BINS_MAX, subdivision)
+        rebin(rw_tmp, 1.0/BINS_MAX, subdivision)
 
     # "allocate" arrays
     x = np.zeros(n_dim)
@@ -131,6 +131,12 @@ def vegas(n_dim, n_iter, n_events):
         for i in range(n_events):
             xwgt = generate_random_array(n_dim, divisions, x, div_index)
             wgt = xjac*xwgt
+
+            for h in x:
+                if h > 1:
+                    import ipdb
+                    ipdb.set_trace()
+
 
             # Call the integrand
             tmp = wgt*MC_INTEGRAND.py_func(x)

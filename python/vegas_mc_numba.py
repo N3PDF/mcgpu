@@ -34,8 +34,8 @@ def generate_random_array(n_dim, divisions, x, div_index):
     for i in range(n_dim):
         rn = internal_rand()
         # Get a random number randomly assigned to a subdivision
-        xn = 1.0 + BINS_MAX*(1.0 - rn)
-        int_xn = max(0, min(int(xn)-1, BINS_MAX))
+        xn = BINS_MAX*(1.0 - rn)
+        int_xn = max(0, min(int(xn), BINS_MAX))
         # In practice int_xn = int(xn)-1 unless xn < 1
         aux_rand = xn - int_xn
         if int_xn == 0:
@@ -51,6 +51,7 @@ def generate_random_array(n_dim, divisions, x, div_index):
 
 @nb.njit(nb.void(nb.float64[:], nb.float64, nb.float64[:]))
 def rebin(rw, rc, subdivisions):
+    """ broken from function above to use it for initialiation """
     k = -1
     dr = 0.0
     aux = []
@@ -127,10 +128,9 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
     divisions = np.zeros( (n_dim, BINS_MAX) )
     divisions[:, 0] = 1.0
     # Do a fake initialization at the begining
-    tmp_sq = np.ones(BINS_MAX)
+    rw_tmp = np.ones(BINS_MAX)
     for i in range(n_dim):
-        #refine_grid(tmp_sq, subdivision)
-        rebin(tmp_sq, 1.0/BINS_MAX, divisions[i])
+        rebin(rw_tmp, 1.0/BINS_MAX, divisions[i])
 
     # "allocate" arrays
     x = np.zeros(n_dim)
@@ -203,8 +203,8 @@ class make_vegas:
 #         self.swtd_int_sum = 0
 
     def integrate(self, iters = 5, calls = 1e4):
-        results = np.zeros(self.dim)
-        sigmas = np.zeros(self.dim)
+        results = np.zeros(iters)
+        sigmas = np.zeros(iters)
         r = vegas(self.dim, iters, calls, results, sigmas)
         for k, (res, sigma) in enumerate(zip(results, sigmas)):
             print("Results for interation {0}: {1} +/- {2}".format(k+1, res, sigma))
@@ -224,7 +224,7 @@ if __name__ == '__main__':
     xupp = setup['xupp']
     dim = setup['dim']
 
-    print(f'VEGAS MC python, ncalls={ncalls}:')
+    print(f'VEGAS MC numba, ncalls={ncalls}:')
     start = time.time()
     v = make_vegas(dim=dim, xl = xlow, xu = xupp)
     r = v.integrate(calls=ncalls)
