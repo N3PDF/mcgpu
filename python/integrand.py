@@ -2,13 +2,13 @@
 import numpy as np
 import numba as nb
 
-DIM = 1
+DIM = 4
 
 # MC integration setup
 setup = {
     'xlow': np.array([0]*DIM, dtype=np.float64),
     'xupp': np.array([1]*DIM, dtype=np.float64),
-    'ncalls': 10000,
+    'ncalls': int(1e7),
     'dim': DIM
 }
 
