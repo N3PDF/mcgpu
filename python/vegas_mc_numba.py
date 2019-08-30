@@ -5,167 +5,216 @@ import numpy as np
 import numba as nb
 
 BINS_MAX = 50
+ALPHA = 1.5
+
+@nb.njit(nb.float64())
+def internal_rand():
+    """ Generates a random number """
+    return np.random.uniform(0,1)
+
+@nb.njit(nb.float64(nb.int64, nb.float64[:,:], nb.float64[:], nb.int64[:]))
+def generate_random_array(n_dim, divisions, x, div_index):
+    """
+    Generates a random array
+    # Arguments in:
+        - n_dim: number of dimensions
+        - divisions: an array defining the grid divisions
+    
+    # Arguments out:
+        - x: array of dimension n_dim with the random number
+        - div_index: array of dimension n_dim with the subdivision 
+                     of each point
+
+    # Returns:
+        - wgt: weight of the point
+    """
+    reg_i = 0.0
+    reg_f = 1.0
+    wgt = 1.0
+    for i in range(n_dim):
+        rn = internal_rand()
+        # Get a random number randomly assigned to a subdivision
+        xn = BINS_MAX*(1.0 - rn)
+        int_xn = max(0, min(int(xn), BINS_MAX))
+        # In practice int_xn = int(xn)-1 unless xn < 1
+        aux_rand = xn - int_xn
+        if int_xn == 0:
+            x_ini = 0.0
+        else:
+            x_ini = divisions[i, int_xn - 1]
+        xdelta = divisions[i, int_xn] - x_ini
+        rand_x = x_ini + xdelta*aux_rand
+        x[i] = reg_i + rand_x*(reg_f - reg_i)
+        wgt *= xdelta*BINS_MAX
+        div_index[i] = int_xn
+    return wgt
+
+@nb.njit(nb.void(nb.float64[:], nb.float64, nb.float64[:]))
+def rebin(rw, rc, subdivisions):
+    """ broken from function above to use it for initialiation """
+    k = -1
+    dr = 0.0
+    aux = []
+    for i in range(BINS_MAX-1):
+        old_xi = 0.0
+        while rc > dr:
+            k += 1
+            dr += rw[k]
+        if k > 0:
+            old_xi = subdivisions[k-1]
+        old_xf = subdivisions[k]
+        dr -= rc
+        delta_x = old_xf-old_xi
+        aux.append(old_xf - delta_x*(dr / rw[k]))
+    aux.append(1.0)
+    for i, tmp in enumerate(aux):
+        subdivisions[i] = tmp
 
 
-# vegas MC implementation
+@nb.njit(nb.void(nb.float64[:], nb.float64[:]))
+def refine_grid(res_sq, subdivisions):
+    """
+    Resize the grid
+    # Arguments in:
+        - res_sq: array with the accumulative sum for each division for one dim
+    # Arguments inout:
+        - subdivisions: the array the defining the vegas grid divisions for one dim
+    """
+    # First we smear out the array div_sq, where we have store
+    # the value of f^2 for each sub_division for each dimension
+    aux = [
+            (res_sq[0] + res_sq[1])/2.0
+            ]
+    for i in range(1, BINS_MAX-1):
+        tmp = (res_sq[i-1] + res_sq[i] + res_sq[i+1])/3.0
+        if tmp < 1e-30:
+            tmp = 1e-30
+        aux.append(tmp)
+    tmp = (res_sq[BINS_MAX-2] + res_sq[BINS_MAX-1])/2.0
+    aux.append(tmp)
+    aux_sum = np.sum(np.array(aux))
+    # Now we refine the grid according to 
+    # journal of comp phys, 27, 192-203 (1978) G.P. Lepage
+    rw = []
+    for res in aux:
+        tmp = pow( (1.0 - res/aux_sum)/(np.log(aux_sum) - np.log(res)), ALPHA )
+        rw.append(tmp)
+    rw = np.array(rw)
+    rc = np.sum(rw)/BINS_MAX
+    rebin(rw, rc, subdivisions)
+
 @nb.njit(
-    nb.types.UniTuple(nb.float64,4)(
-        nb.int64,nb.float64[:],nb.float64[:],nb.int64,nb.int64,
-        nb.int64,nb.float64[:],nb.float64[:,:],nb.float64[:],nb.float64,
-        nb.float64[:,:],nb.int64[:],nb.int64[:],
-        nb.int64,nb.float64,nb.int64,nb.float64
-        )
-    )
-def vegas(dim, xl, xu, calls, stage, sbins, sdelx,
-          sxi, sxin, svol, sd, sbox, sbin, sjac,
-          ssum_wgts, ssamples, swtd_int_sum):
+        nb.types.Tuple(
+            (nb.float64, nb.float64)
+            ) (nb.int64, nb.int64, nb.int64, nb.float64[:], nb.float64[:])
+)
+def vegas(n_dim, n_iter, n_events, results, sigmas):
+    """
+    # Arguments in:
+        n_dim: number of dimensions
+        n_iter: number of iterations
+        n_events: number of events per iteration
 
-    for i in range(dim):
-        if xu[i] <= xl[i]:
-            raise ValueError('xu must be greater than xl')
-        if xu[i] - xl[i] > 1e308:
-            raise ValueError('are you really sure about the xu and xl?')
+    # Arguments out:
+        results: array with all results by iteration
+        sigmas: array with all errors by iteration
 
-    if stage == 0:
-        vol = 1
-        sbins = 1
-        for j in range(dim):
-            dx = xu[j] - xl[j]
-            sdelx[j] = dx
-            vol *= dx
-            sxi[0,j] = 0
-            sxi[1,j] = 1
-        svol = vol
+    # Returns:
+        - integral value
+        - error
+    """
+    # Initialize variables
+    xjac = 1.0/n_events
+    divisions = np.zeros( (n_dim, BINS_MAX) )
+    divisions[:, 0] = 1.0
+    # Do a fake initialization at the begining
+    rw_tmp = np.ones(BINS_MAX)
+    for i in range(n_dim):
+        rebin(rw_tmp, 1.0/BINS_MAX, divisions[i])
 
-    if stage == 1:
-        ssum_wgts = 0
-        ssamples = 0
+    # "allocate" arrays
+    x = np.zeros(n_dim)
+    div_index = np.zeros(n_dim, dtype = np.int64)
+    all_results = []
 
-    if stage <= 2:
+    # Loop of iterations
+    for k in range(n_iter):
+        res = 0.0
+        res2 = 0.0
+        arr_res2 = np.zeros( (n_dim, BINS_MAX) )
 
-        sjac = svol * BINS_MAX ** dim / calls
+        for i in range(n_events):
+            xwgt = generate_random_array(n_dim, divisions, x, div_index)
+            wgt = xjac*xwgt
 
-        if sbins != BINS_MAX:
-            # resize grid
-            pts_per_bin = sbins / BINS_MAX
-            for j in range(dim):
-                i = 1
-                xnew = 0
-                dw = 0
-                for k in range(1, sbins+1):
-                    dw += 1.0
-                    xold = xnew
-                    xnew = sxi[k, j]
+            # Call the integrand
+            tmp = wgt*MC_INTEGRAND(x)
+            tmp2 = pow(tmp, 2)
 
-                    while dw > pts_per_bin:
-                        dw -= pts_per_bin
-                        sxin[i] = xnew - (xnew - xold) * dw
-                        i += 1
+            res += tmp
+            res2 += tmp2
 
-                for k in range(1, BINS_MAX):
-                    sxi[k, j] = sxin[k]
+            for j, ind in enumerate(div_index):
+                arr_res2[j, ind] += tmp2
 
-                sxi[BINS_MAX, j] = 1
-            sbins = BINS_MAX
+        err_tmp2 = max((n_events*res2 - res**2)/(n_events-1.0), 1e-30)
+        sigma = np.sqrt(err_tmp2)
 
-    cum_int = 0.0
-    cum_sig = 0.0
+        #print("Results for interation {0}: {1} +/- {2}".format(k+1, res, sigma))
+        results[k] = res
+        sigmas[k] = sigma
+        all_results.append( (res, sigma) )
+        for j in range(n_dim):
+            refine_grid(arr_res2[j], divisions[j])
 
-    iterations = 5
-    x = np.zeros(dim)
-    for it in range(iterations):
-        intgrl = 0
-        tss = 0
 
-        for i in range(sbins):
-            for j in range(dim):
-                sd[i, j] = 0.0
+    # Compute the final results
+    aux_res = 0.0
+    weight_sum = 0.0
+    for result in all_results:
+        res = result[0]
+        sigma = result[1]
+        wgt_tmp = 1.0/pow(sigma, 2)
+        aux_res += res*wgt_tmp
+        weight_sum += wgt_tmp
 
-        for i in range(dim):
-            sbox[i] = 0
-
-        m = 0
-        q = 0
-        f_sq_sum = 0.0
-
-        for k in range(calls):
-
-            bin_vol = 1
-            for i in range(dim):
-                z = (sbox[i] + np.random.uniform(0,1)) * sbins
-                w = nb.int64(z)
-                sbin[i] = w
-                if z == 0:
-                    bin_width = sxi[1, i]
-                    y = z * bin_width
-                else:
-                    bin_width = sxi[w+1, i] - sxi[w, i]
-                    y = sxi[w, i] + (z - w) * bin_width
-                x[i] = xl[i] + y * sdelx[i]
-                bin_vol *= bin_width
-
-            fval = sjac * bin_vol * MC_INTEGRAND(x)
-
-            d = fval - m
-            m += d / (k + 1.0)
-            q += d * d * (k / (k + 1.0))
-
-            f_sq = fval * fval
-
-            # accumulate distribution
-            for j in range(dim):
-                i = sbin[j]
-                sd[i, j] += f_sq
-
-        intgrl += m * calls
-        f_sq_sum = q * calls
-        tss += f_sq_sum
-        var = tss / (calls - 1)
-
-        if var > 0:
-            wgt = 1.0 / var
-        elif ssum_wgts > 0:
-            wgt = ssum_wgts / ssamples
-        else:
-            wgt = 0.0
-
-        if wgt > 0.0:
-            ssamples+=1
-            ssum_wgts += wgt
-            swtd_int_sum += intgrl * wgt
-            cum_int = swtd_int_sum / ssum_wgts
-            cum_sig = np.sqrt(1 / ssum_wgts)
-        else:
-            cum_int += (intgrl - cum_int) / (it + 1.0)
-            cum_sig = 0.0
-
-    return svol, cum_int, cum_sig, np.sqrt(cum_sig/calls)
-
+    final_result = aux_res/weight_sum
+    sigma = np.sqrt(1.0/weight_sum)
+    return final_result, sigma
 
 class make_vegas:
     """A Vegas MC integrator using importance sampling"""
-    def __init__(self, dim):
+    def __init__(self, dim, xl = None, xu = None):
         self.dim = dim
-        self.sbins = 0
-        self.sbin = np.zeros(dim, dtype=np.int64)
-        self.sdelx = np.zeros(dim)
-        self.sxi = np.zeros(shape=(BINS_MAX+1, dim))
-        self.sxin = np.zeros(shape=(BINS_MAX+1))
-        self.svol = 0
-        self.sd = np.zeros(shape=(BINS_MAX, dim))
-        self.sbox = np.zeros(dim, dtype=np.int64)
-        self.sjac = 0
-        self.ssum_wgts = 0
-        self.ssamples = 0
-        self.swtd_int_sum = 0
+        # At the moment we save xl, xu but it is not used
+        self.xl = xl
+        self.xu = xu
+#         self.sbins = 0
+#         self.sbin = np.zeros(dim, dtype=np.int64)
+#         self.sdelx = np.zeros(dim)
+#         self.sxi = np.zeros(shape=(BINS_MAX+1, dim))
+#         self.sxin = np.zeros(shape=(BINS_MAX+1))
+#         self.svol = 0
+#         self.sd = np.zeros(shape=(BINS_MAX, dim))
+#         self.sbox = np.zeros(dim, dtype=np.int64)
+#         self.sjac = 0
+#         self.ssum_wgts = 0
+#         self.ssamples = 0
+#         self.swtd_int_sum = 0
 
-    def integrate(self, xl, xu, calls, stage):
-        r = vegas(self.dim, xl, xu, calls, stage,
-                self.sbins, self.sdelx, self.sxi, self.sxin, self.svol,
-                self.sd, self.sbox, self.sbin, self.sjac,
-                self.ssum_wgts, self.ssamples, self.swtd_int_sum)
-        self.svol = r[0]
-        return r[1:]
+    def integrate(self, iters = 5, calls = 1e4):
+        results = np.zeros(iters)
+        sigmas = np.zeros(iters)
+        r = vegas(self.dim, iters, calls, results, sigmas)
+        for k, (res, sigma) in enumerate(zip(results, sigmas)):
+            print("Results for interation {0}: {1} +/- {2}".format(k+1, res, sigma))
+        return r
+#         r = vegas(self.dim, xl, xu, calls, stage,
+#                 self.sbins, self.sdelx, self.sxi, self.sxin, self.svol,
+#                 self.sd, self.sbox, self.sbin, self.sjac,
+#                 self.ssum_wgts, self.ssamples, self.swtd_int_sum)
+#         self.svol = r[0]
+#         return r[1:]
 
 
 if __name__ == '__main__':
@@ -175,17 +224,10 @@ if __name__ == '__main__':
     xupp = setup['xupp']
     dim = setup['dim']
 
-    print(f'VEGAS MC stage=0 numba, ncalls={ncalls}:')
+    print(f'VEGAS MC numba, ncalls={ncalls}:')
     start = time.time()
-    v = make_vegas(dim=dim)
-    r = v.integrate(xl=xlow, xu=xupp, calls=ncalls, stage=0)
-    end = time.time()
-    print(r)
-    print(f'time (s): {end-start}')
-
-    print(f'VEGAS MC stage=1 numba, ncalls={ncalls}:')
-    start = time.time()
-    r = v.integrate(xl=xlow, xu=xupp, calls=ncalls, stage=1)
+    v = make_vegas(dim=dim, xl = xlow, xu = xupp)
+    r = v.integrate(calls=ncalls)
     end = time.time()
     print(r)
     print(f'time (s): {end-start}')
