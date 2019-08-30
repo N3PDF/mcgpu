@@ -12,7 +12,7 @@ module vegas_mod
    ! Damping parameter, alpha = 0 -> no adaptation
    real(dp), parameter :: ALPHA = 1.5d0
    ! Subdivisions of the Vegas grid per dimension
-   integer, parameter :: NDMX = 10
+   integer, parameter :: NDMX = 50
 
    ! Divisions of the Vegas grid
    real(dp), dimension(:, :), allocatable :: divisions
@@ -30,7 +30,7 @@ module vegas_mod
          real(dp), intent(out) :: wgt
          integer, dimension(n_dim), intent(out) :: div_index
          integer :: i, int_xn
-         real(dp) :: rn, x_n, aux_rand, x_ini, xdelta, rand_x
+         real(dp) :: rn, xn, aux_rand, x_ini, xdelta, rand_x
          ! NOTE: I assume here the region of integration to be 0 to 1 in all dimensions
          real(dp), parameter :: reg_i = 0d0, reg_f = 1d0
          ! Subrotuine to generate random numbers
@@ -44,10 +44,10 @@ module vegas_mod
          do i = 1, n_dim
             rn = internal_rand()
             ! Ger a random number randomly assigned to one of the subdivisions
-            x_n = 1d0 + NDMX*(1d0 - rn)
-            int_xn = max(1, min( int(x_n), NDMX ))
-            ! in practice int_xn = int(xn) unless x_n < 1
-            aux_rand = x_n - int_xn 
+            xn = 1d0 + NDMX*(1d0 - rn)
+            int_xn = max(1, min( int(xn), NDMX ))
+            ! in practice int_xn = int(xn) unless xn < 1
+            aux_rand = xn - int_xn 
             if (int_xn == 1) then
                x_ini = 0d0
             else
@@ -92,22 +92,20 @@ module vegas_mod
          subdivisions(NDMX) = 1d0
       end subroutine rebin
 
-      subroutine refine_grid(res_sq)
+      subroutine refine_grid(res_sq, subdivisions)
          real(dp), dimension(NDMX), intent(in) :: res_sq
+         real(dp), intent(inout), dimension(NDMX) :: subdivisions
          real(dp), dimension(NDMX) :: aux, rw
          integer :: i
          real(dp) :: rc, aux_sum
-         rc = 0d0
          ! First we smear out the array div_sq, where we have store
          ! the value of f^2 for each sub_division for each dimension
          aux(1) = (res_sq(1) + res_sq(2))/2d0
-         aux_sum = aux(1)
          do i = 2, NDMX - 1
             aux(i) = (res_sq(i-1) + res_sq(i) + res_sq(i+1))/3d0
-            aux_sum = aux_sum + aux(i)
          enddo
          aux(NDMX) = (res_sq(NDMX-1) + res_sq(NDMX))/2d0
-         aux_sum = aux_sum + aux(NDMX)
+         aux_sum = sum(aux)
          ! Now we refine the grid according to 
          ! journal of comp phys, 27, 192-203 (1978) G.P. Lepage
          do i = 1, NDMX
@@ -115,9 +113,9 @@ module vegas_mod
                aux(i) = 1d-30
             endif
             rw(i) = ( (1d0 - aux(i)/aux_sum)/(dlog(aux_sum) - dlog(aux(i))) )**ALPHA
-            rc = rc + rw(i)
          enddo
-         call rebin(rc/NDMX, rw, divisions)
+         rc = sum(rw)/NDMX
+         call rebin(rc, rw, subdivisions)
       end subroutine
 
       subroutine vegas(f_integrand, warmup, n_dim, n_iter, n_events, final_result, sigma)
@@ -204,7 +202,7 @@ module vegas_mod
             all_results(k, 2) = sigma
             if (warmup) then
                do j = 1, n_dim
-                  call refine_grid(arr_res2(:, j))
+                  call refine_grid(arr_res2(:, j), divisions(:, j))
                enddo
             endif
          enddo
