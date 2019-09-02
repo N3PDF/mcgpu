@@ -166,7 +166,7 @@ module vegas_mod
             res = 0d0
             arr_res2(:,:) = 0d0
 
-            !$omp parallel private(tmp, tmp2, xwgt, wgt, x)
+            !$omp parallel private(tmp, tmp2, xwgt, wgt, x, div_index)
             !$omp do schedule (dynamic)
             do i = 1, n_events
                ! Generate a random vector of dimensions n_dim
