@@ -2,7 +2,7 @@
 import numpy as np
 import numba as nb
 
-DIM = 2
+DIM = 7
 
 # MC integration setup
 setup = {

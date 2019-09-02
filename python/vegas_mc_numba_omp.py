@@ -135,7 +135,6 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         rebin(rw_tmp, 1.0/BINS_MAX, divisions[i])
 
     # "allocate" arrays
-    div_index = np.zeros(n_dim, dtype = np.int64)
     all_results = []
 
     # Loop of iterations
@@ -145,6 +144,7 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         arr_res2 = np.zeros( (n_dim, BINS_MAX) )
 
         for i in nb.prange(n_events):
+            div_index = np.zeros(n_dim, dtype = np.int64)
             xwgt, x = generate_random_array(n_dim, divisions, div_index)
             wgt = xjac*xwgt
 
@@ -152,11 +152,11 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
             tmp = wgt*MC_INTEGRAND(x)
             tmp2 = pow(tmp, 2)
 
-            res = res + tmp
-            res2 = res2 + tmp2
+            res += tmp
+            res2 += tmp2
 
             for j, ind in enumerate(div_index):
-                arr_res2[j, ind] = arr_res2[j, ind] + tmp2
+                arr_res2[j, ind] += tmp2
 
         err_tmp2 = max((n_events*res2 - res**2)/(n_events-1.0), 1e-30)
         sigma = np.sqrt(err_tmp2)
