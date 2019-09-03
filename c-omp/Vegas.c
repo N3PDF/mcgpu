@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <sys/param.h>
+#include <omp.h>
 #include "Vegas.h"
 
 double internal_rand(){
@@ -96,6 +97,12 @@ int vegas(double (*f_integrand)(double*, int), const int warmup, const int n_dim
     double total_res = 0.0;
     double total_weight = 0.0;
 
+    #if defined _OPENMP
+    printf("OMP active\n");
+    printf("Maximum number of threads: %d\n", omp_get_num_procs() );
+    printf("Number of threads selected: %d\n", omp_get_max_threads() );
+    #endif
+
     for( int k = 0; k < n_iter; k++ ) {
         double res = 0.;
         double res2 = 0.;
@@ -105,21 +112,34 @@ int vegas(double (*f_integrand)(double*, int), const int warmup, const int n_dim
         arr_res2 = (double *) calloc(n_dim*BINS_MAX, sizeof(double));
         int *div_index;
         double *x;
-        div_index = (int *) malloc(n_dim*sizeof(int));
-        x = (double *) malloc(n_dim*sizeof(double));
 
-        for ( int i = 0;  i < n_events; i++ ) {
-            double xwgt = generate_random_array(n_dim, divisions, x, div_index);
-            double wgt = xwgt*xjac;
-            double tmp = wgt*f_integrand(x, n_dim);
-            double tmp2 = pow(tmp,2); 
-            res += tmp;
-            res2 += tmp2;
+        #pragma omp parallel private(x, div_index)
+        {
+            div_index = (int *) malloc(n_dim*sizeof(int));
+            x = (double *) malloc(n_dim*sizeof(double));
+            #pragma omp for reduction( + : res, res2 )
+            for ( int i = 0;  i < n_events; i++ ) {
+                double xwgt;
+                #pragma omp critical 
+                {
+                    xwgt = generate_random_array(n_dim, divisions, x, div_index);
+                }
+                double wgt = xwgt*xjac;
+                double tmp = wgt*f_integrand(x, n_dim);
+                double tmp2 = pow(tmp,2); 
+                res += tmp;
+                res2 += tmp2;
 
-            for( int j = 0; j < n_dim; j++ ){
-                arr_res2[j*BINS_MAX + div_index[j]] += tmp2;
+                #pragma omp critical 
+                { // array reduction must be done manually in C?
+                    for( int j = 0; j < n_dim; j++ ){
+                        arr_res2[j*BINS_MAX + div_index[j]] += tmp2;
+                    }
+                }
+
             }
-
+            free(x);
+            free(div_index);
         }
         double err_tmp2 = MAX((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
         sigma = sqrt(err_tmp2);
@@ -133,9 +153,7 @@ int vegas(double (*f_integrand)(double*, int), const int warmup, const int n_dim
         total_res += res*wgt_tmp;
         total_weight += wgt_tmp;
 
-        free(x);
         free(arr_res2);
-        free(div_index);
     }
 
     

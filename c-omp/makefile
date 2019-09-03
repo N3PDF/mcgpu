@@ -6,7 +6,6 @@ CORE = c-omp.c Vegas.c lepage_test.c
 CC = gcc
 
 OBJDIR = ../obj
-MODDIR = ../mod
 BINDIR = ../bin
 EXECUTABLEPATH = $(BINDIR)/$(EXECUTABLE)
 VPATH += integrands/
@@ -42,5 +41,5 @@ run_debug: $(EXECUTABLEPATH)
 	gdb $(EXECUTABLEPATH)
 
 clean:
-	@echo "Cleaning obj, mod and bin folders"
+	@echo "Cleaning obj and bin folders"
 	@rm -f $(OBJDIR)/* $(BINDIR)/*
