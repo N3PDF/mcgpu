@@ -31,6 +31,8 @@ $(EXECUTABLEPATH): $(OBJFILES)
 	@echo "Linking into: $(EXECUTABLEPATH)"
 	@$(LD) -o $(EXECUTABLEPATH) $^ $(CFLAGS) $(LDFLAGS)
 
+dirs: $(OBJDIR) $(BINDIR)
+
 $(OBJDIR) $(BINDIR):
 	@mkdir -p $@
 
