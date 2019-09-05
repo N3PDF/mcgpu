@@ -15,7 +15,7 @@ OBJFILES = $(addprefix $(OBJDIR)/, $(patsubst %.c,%.o, $(CORE)))
 ifeq ($(CC), gcc)
 	CC = gcc
 	LD = gcc
-	CFLAGS = -Wall -Og -ggdb -cpp -fbounds-check -lm
+	CFLAGS = -Wall -Og -ggdb -fbounds-check -lm 
 else
 	CC = pgcc
 	LD = pgcc
