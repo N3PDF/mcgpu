@@ -8,108 +8,125 @@ import pycuda.autoinit
 from pycuda.compiler import SourceModule
 import pycuda.gpuarray as gpuarray
 
-BINS_MAX = 50
-ALPHA = 1.5
+BINS_MAX = 30
+ALPHA = 0.1
+    
+mod = SourceModule("""
+#include <curand.h>
+#include <curand_kernel.h>
+
+#define BINS_MAX 30
+#define ALPHA 0.1
+
+extern "C" __global__
+void events_kernel(double *all_randoms, double *all_xwgts, int n, int n_events, double xjac, double *all_res, double *all_res2) {
+    int block_id = blockIdx.x;
+    int thread_id = threadIdx.x;
+    int block_size = blockDim.x;
+
+    int index = block_id*block_size + thread_id;
+    int grid_dim = gridDim.x;
+    int stride = block_size * grid_dim;
+
+    // shared lepage
+    double a = 0.1;
+    double pref = pow(1.0/a/sqrt(M_PI), n);
+
+    for (int i = index; i < n_events; i += stride) {
+        double wgt = all_xwgts[i]*xjac;
+
+        double coef = 0.0;
+        for (int j = 0; j < n; j++) {
+            coef += pow( (all_randoms[i*n + j] - 1.0/2.0)/a, 2 );
+        }
+        double lepage = pref*exp(-coef);
+
+        double tmp = wgt*lepage;
+        all_res[i] = tmp;
+        all_res2[i] = pow(tmp,2);
+    }
+}
+
+extern "C" __global__
+void generate_random_array_kernel(const int n_events, const int n_dim, const double *divisions, double *all_randoms, double *all_wgts, int *all_div_indexes) {
+    double reg_i = 0.0;
+    double reg_f = 1.0;
+
+    int block_id = blockIdx.x;
+    int thread_id = threadIdx.x;
+    int block_size = blockDim.x;
+
+    int index = block_id*block_size + thread_id;
+    int grid_dim = gridDim.x;
+    int stride = block_size * grid_dim;
+
+    // Use curandState_t to keep track of the seed, which is thread dependent
+    curandState_t state;
+    // seed-sequence-offset
+    curand_init(index, 0, 0, &state);
+
+    for (int j = index; j < n_events; j+= stride) {
+        double wgt = 1.0;
+        for (int i = 0; i < n_dim; i++) {
+            double rn = (double) curand(&state)/RAND_MAX/2; //unsigned?
+            double xn = BINS_MAX*(1.0 - rn);
+            int int_xn = max(0, min( (int) xn, BINS_MAX));
+            double aux_rand = xn - int_xn;
+            double x_ini = 0.0;
+            if (int_xn > 0) {
+                x_ini = divisions[BINS_MAX*i + int_xn-1];
+            }
+            double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
+            double rand_x = x_ini + xdelta*aux_rand;
+            wgt *= xdelta*BINS_MAX;
+            // Now we need to add an offset to the arrays
+            all_randoms[j*n_dim + i] = reg_i + rand_x*(reg_f - reg_i);
+            all_div_indexes[j*n_dim + i] = int_xn;
+            }
+        all_wgts[j] = wgt;
+    }
+}
+    """, no_extern_c=True)
+
+events_kernel = mod.get_function("events_kernel")
+generate_random_array_kernel = mod.get_function("generate_random_array_kernel")
 
 @nb.njit(nb.float64())
 def internal_rand():
     """ Generates a random number """
     return np.random.uniform(0,1)
 
-@nb.njit(nb.float64[:,:](nb.int64, nb.int64, nb.float64[:], nb.int64[:]))
+@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.int64[:]))
 def loop(n_events, n_dim,  fres2, all_div_indexes):
-    arr_res2 = np.zeros((n_dim, BINS_MAX))
+    arr_res2 = np.zeros(n_dim * BINS_MAX)
     for i in range(n_events):
         for j in range(n_dim):
-            arr_res2[j, all_div_indexes[i*n_dim + j]] += fres2[i]
+            arr_res2[j * BINS_MAX + all_div_indexes[i*n_dim + j]] += fres2[i]
     return arr_res2
 
 
-@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:,:], nb.float64[:], nb.int64[:]))
-def generate_random_array(n_events, n_dim, divisions, x, div_index):
-    """
-    Generates a random array
-    # Arguments in:
-        - n_dim: number of dimensions
-        - divisions: an array defining the grid divisions
-
-    # Arguments out:
-        - x: array of dimension n_dim with the random number
-        - div_index: array of dimension n_dim with the subdivision
-                     of each point
-
-    # Returns:
-        - wgt: weight of the point
-    """
-    all_wgts = np.zeros(n_events)
-    for j in range(n_events):
-        reg_i = 0.0
-        reg_f = 1.0
-        wgt = 1.0
-        index = j*n_dim
-        for i in range(n_dim):
-            rn = internal_rand()
-            # Get a random number randomly assigned to a subdivision
-            xn = BINS_MAX*(1.0 - rn)
-            int_xn = max(0, min(int(xn), BINS_MAX))
-            # In practice int_xn = int(xn)-1 unless xn < 1
-            aux_rand = xn - int_xn
-            if int_xn == 0:
-                x_ini = 0.0
-            else:
-                x_ini = divisions[i, int_xn - 1]
-            xdelta = divisions[i, int_xn] - x_ini
-            rand_x = x_ini + xdelta*aux_rand
-            x[i+index] = reg_i + rand_x*(reg_f - reg_i)
-            wgt *= xdelta*BINS_MAX
-            div_index[i+index] = int_xn
-        all_wgts[j] = wgt
-    return all_wgts
-
-@nb.njit(nb.void(nb.float64[:], nb.float64, nb.float64[:]))
-def rebin(rw, rc, subdivisions):
+@nb.njit(nb.void(nb.float64[:], nb.float64, nb.float64[:], nb.int64))
+def rebin(rw, rc, subdivisions, index):
     """ broken from function above to use it for initialiation """
     k = -1
     dr = 0.0
-    aux = []
+    aux = [] #np.zeros(BINS_MAX, dtype=np.float64)
     for i in range(BINS_MAX-1):
         old_xi = 0.0
         while rc > dr:
             k += 1
             dr += rw[k]
         if k > 0:
-            old_xi = subdivisions[k-1]
-        old_xf = subdivisions[k]
+            old_xi = subdivisions[k-1+index]
+        old_xf = subdivisions[k+index]
         dr -= rc
         delta_x = old_xf-old_xi
         aux.append(old_xf - delta_x*(dr / rw[k]))
     aux.append(1.0)
     for i, tmp in enumerate(aux):
-        subdivisions[i] = tmp
+        subdivisions[i+index] = tmp
 
-@nb.njit(nb.void(nb.int64, nb.float64[:], nb.float64, nb.float64[:,:]))
-def rebin2(index, rw, rc, subdivisions):
-    """ broken from function above to use it for initialiation """
-    k = -1
-    dr = 0.0
-    aux = []
-    for i in range(BINS_MAX-1):
-        old_xi = 0.0
-        while rc > dr:
-            k += 1
-            dr += rw[k]
-        if k > 0:
-            old_xi = subdivisions[index, k-1]
-        old_xf = subdivisions[index, k]
-        dr -= rc
-        delta_x = old_xf-old_xi
-        aux.append(old_xf - delta_x*(dr / rw[k]))
-    aux.append(1.0)
-    for i, tmp in enumerate(aux):
-        subdivisions[index, i] = tmp
-
-
-@nb.njit(nb.void(nb.int64, nb.float64[:], nb.float64[:,:]))
+@nb.njit(nb.void(nb.int64, nb.float64[:], nb.float64[:]))
 def refine_grid(j, res_sq, subdivisions):
     """
         Resize the grid
@@ -140,8 +157,7 @@ def refine_grid(j, res_sq, subdivisions):
         rw.append(tmp)
     rw = np.array(rw)
     rc = np.sum(rw)/BINS_MAX
-    rebin2(index, rw, rc, subdivisions)
-
+    rebin(rw, rc, subdivisions, index)
 
 def vegas(n_dim, n_iter, n_events, results, sigmas):
     """
@@ -160,50 +176,21 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
     """
     # Initialize variables
     xjac = 1.0/n_events
-    divisions = np.zeros( (n_dim, BINS_MAX) )
-    divisions[:, 0] = 1.0
+    divisions = np.zeros(n_dim * BINS_MAX, dtype=np.float64)
+    for j in range(n_dim):
+        divisions[j * BINS_MAX] = 1.0
+        
     # Do a fake initialization at the begining
-    rw_tmp = np.ones(BINS_MAX)
-    for i in range(n_dim):
-        rebin(rw_tmp, 1.0/BINS_MAX, divisions[i])
+    rw_tmp = np.ones(BINS_MAX, dtype=np.float64)
+    for j in range(n_dim):
+        rebin(rw_tmp, 1.0/BINS_MAX, divisions, j * BINS_MAX)
+        
+    total_res = 0.0
+    total_weight = 0.0
 
-    # "allocate" arrays
-    x = np.zeros(n_dim)
-    div_index = np.zeros(n_dim, dtype = np.int64)
-    all_results = []
-
-    mod = SourceModule("""
-    __global__
-    void events_kernel(double *all_randoms, double *all_xwgts, int n, int n_events, double xjac, double *all_res, double *all_res2) {
-    int block_id = blockIdx.x;
-    int thread_id = threadIdx.x;
-    int block_size = blockDim.x;
-
-    int index = block_id*block_size + thread_id;
-    int grid_dim = gridDim.x;
-    int stride = block_size * grid_dim;
-
-    // shared lepage
-    double a = 0.1;
-    double pref = pow(1.0/a/sqrt(M_PI), n);
-
-    for (int i = index; i < n_events; i += stride) {
-        double wgt = all_xwgts[i]*xjac;
-
-        double coef = 0.0;
-        for (int j = 0; j < n; j++) {
-            coef += pow( (all_randoms[i*n + j] - 1.0/2.0)/a, 2 );
-        }
-        double lepage = pref*exp(-coef);
-
-        double tmp = wgt*lepage;
-        all_res[i] = tmp;
-        all_res2[i] = pow(tmp,2);
-    }
-    }
-    """)
-
-    events_kernel = mod.get_function("events_kernel")
+    # threads and blocks
+    threads = 256
+    blocks = int((n_events + threads - 1) / threads)
 
     # Loop of iterations
     for k in range(n_iter):
@@ -211,64 +198,44 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         res2 = 0.0
         sigma = 0.0
 
-
+        # input arrays
         NN = n_dim*n_events
-        all_randoms = np.empty(NN)
-        all_xwgts = np.empty(n_events)
-
+        all_randoms = np.empty(NN, dtype=np.float64)
+        all_xwgts = np.empty(n_events, dtype=np.float64)
         all_div_indexes = np.zeros(NN, dtype=np.int64)
-        #for i in range(n_events):
-        #    all_xwgts[i] = generate_random_array(i, n_dim, divisions, all_randoms, all_div_indexes)
-        all_xwgts = generate_random_array(n_events, n_dim, divisions, all_randoms, all_div_indexes)
+cd .
+        # output arrays
+        all_res = np.zeros(n_events)
+        all_res2 = np.zeros(n_events)
+        
+        generate_random_array_kernel(np.int32(n_events), np.int32(n_dim), drv.In(divisions),
+                                     drv.Out(all_randoms), drv.Out(all_xwgts),
+                                     drv.Out(all_div_indexes),
+                                     block=(threads,1,1),
+                                     grid=(blocks,1))
+        
+        events_kernel(drv.In(all_randoms), drv.In(all_xwgts), np.int32(n_dim),
+                      np.int32(n_events), np.float64(xjac), drv.Out(all_res), drv.Out(all_res2),
+                      block=(threads,1, 1), grid=(blocks, 1))
 
-        #all_randoms = gpuarray.to_gpu(all_randoms)
-        #all_xwgts = gpuarray.to_gpu(all_xwgts)
+        res = np.sum(all_res)
+        res2 = np.sum(all_res2)
 
-        #from pycuda import driver
-        #all_res = gpuarray.to_gpu(np.empty(n_events, dtype=np.float64))
-        #all_res2 = gpuarray.to_gpu(np.empty(n_events, dtype=np.float64))
-        #dummy = np.zeros(n_events, dtype=np.int32)
-        #all_res = driver.managed_empty(dummy.shape, dummy.dtype, "C", 0)
-        #all_res2 = driver.managed_zeros_like(np.zeros(n_events, dtype=np.float64))
-        threads = 256
-        blocks = int((n_events + threads - 1) / threads)
-        #events_kernel(all_randoms, all_xwgts, np.int32(n_dim), np.int32(n_events), np.float64(xjac), all_res, all_res2, block=(1,1,1))
+        arr_res2 = loop(n_events, n_dim, all_res2, all_div_indexes)
 
-        fres = np.zeros(n_events, dtype=np.float64)
-        fres2 = np.zeros(n_events, dtype=np.float64)
-        events_kernel(drv.In(all_randoms), drv.In(all_xwgts), np.int32(n_dim), np.int32(n_events), np.float64(xjac), drv.Out(fres),
-                drv.Out(fres2), block=(threads,1, 1), grid = (blocks, 1))
-
-        #fres = all_res.get()
-        #fres2 = all_res2.get()
-        res = np.sum(fres)
-        res2 = np.sum(fres2)
-
-        arr_res2 = loop(n_events, n_dim, fres2, all_div_indexes)
-        arr_res2 = arr_res2.flatten()
-
-        err_tmp2 = max((n_events*res2 - res*res), 1e-30)
+        err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30)
         sigma = np.sqrt(err_tmp2)
         print("Results for interation {0}: {1} +/- {2}".format(k+1, res, sigma))
-        results[k] = res
-        sigmas[k] = sigma
-        all_results.append( (res, sigma) )
+
         for j in range(n_dim):
             refine_grid(j, arr_res2, divisions)
 
-
-    # Compute the final results
-    aux_res = 0.0
-    weight_sum = 0.0
-    for result in all_results:
-        res = result[0]
-        sigma = result[1]
         wgt_tmp = 1.0/pow(sigma, 2)
-        aux_res += res*wgt_tmp
-        weight_sum += wgt_tmp
+        total_res += res * wgt_tmp
+        total_weight += wgt_tmp
 
-    final_result = aux_res/weight_sum
-    sigma = np.sqrt(1.0/weight_sum)
+    final_result = total_res/total_weight
+    sigma = np.sqrt(1.0/total_weight)
     return final_result, sigma
 
 class make_vegas:
@@ -295,8 +262,8 @@ class make_vegas:
         results = np.zeros(iters)
         sigmas = np.zeros(iters)
         r = vegas(self.dim, iters, calls, results, sigmas)
-        for k, (res, sigma) in enumerate(zip(results, sigmas)):
-            print("Results for interation {0}: {1} +/- {2}".format(k+1, res, sigma))
+        #for k, (res, sigma) in enumerate(zip(results, sigmas)):
+        #    print("Results for interation {0}: {1} +/- {2}".format(k+1, res, sigma))
         return r
 #         r = vegas(self.dim, xl, xu, calls, stage,
 #                 self.sbins, self.sdelx, self.sxi, self.sxin, self.svol,
