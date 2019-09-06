@@ -5,8 +5,21 @@
 #include <sys/param.h>
 #include <sys/time.h>
 
+// Cuda includes
+#include <curand.h>
+#include <curand_kernel.h>
+
 #define BINS_MAX 30
 #define ALPHA 0.1
+
+double gpu_double_reduction(const int array_size, const double *target_array) {
+    // Make sense only for arrays which are in the GPU already
+    double res = 0;
+    for (int i = 0; i < array_size; i++) {
+        res += target_array[i];
+    }
+    return res;
+}
 
 __global__
 void events_kernel(double *all_randoms, double *all_xwgts, int n, int n_events, double xjac, double *all_res, double *all_res2) {
@@ -37,34 +50,47 @@ void events_kernel(double *all_randoms, double *all_xwgts, int n, int n_events, 
     }
 }
 
-
-
-double internal_rand(){
-    double x = (double) rand()/RAND_MAX;
-    return x;
-}
-
-double generate_random_array(const int n_dim, const double *divisions, double *x, int *div_index) {
+__global__
+void generate_random_array_kernel(const int n_events, const int n_dim, const double *divisions, double *all_randoms, double *all_wgts, int *all_div_indexes) {
     double reg_i = 0.0;
     double reg_f = 1.0;
-    double wgt = 1.0;
-    for (int i = 0; i < n_dim; i++) {
-        double rn = internal_rand();
-        double xn = BINS_MAX*(1.0 - rn);
-        int int_xn = MAX(0, MIN( (int) xn, BINS_MAX));
-        double aux_rand = xn - int_xn;
-        double x_ini = 0.0;
-        if (int_xn > 0) {
-            x_ini = divisions[BINS_MAX*i + int_xn-1];
-        }
-        double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
-        double rand_x = x_ini + xdelta*aux_rand;
-        x[i] = reg_i + rand_x*(reg_f - reg_i);
-        wgt *= xdelta*BINS_MAX;
-        div_index[i] = int_xn;
+
+    int block_id = blockIdx.x;
+    int thread_id = threadIdx.x;
+    int block_size = blockDim.x;
+
+    int index = block_id*block_size + thread_id;
+    int grid_dim = gridDim.x;
+    int stride = block_size * grid_dim;
+
+    // Use curandState_t to keep track of the seed, which is thread dependent
+    curandState_t state;
+    // seed-sequence-offset
+    curand_init(index, 0, 0, &state);
+
+    for (int j = index; j < n_events; j+= stride) {
+        double wgt = 1.0;
+        for (int i = 0; i < n_dim; i++) {
+            double rn = (double) curand(&state)/RAND_MAX/2; //unsigned?
+            double xn = BINS_MAX*(1.0 - rn);
+            int int_xn = MAX(0, MIN( (int) xn, BINS_MAX));
+            double aux_rand = xn - int_xn;
+            double x_ini = 0.0;
+            if (int_xn > 0) {
+                x_ini = divisions[BINS_MAX*i + int_xn-1];
+            }
+            double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
+            double rand_x = x_ini + xdelta*aux_rand;
+            wgt *= xdelta*BINS_MAX;
+            // Now we need to add an offset to the arrays
+            all_randoms[j*n_dim + i] = reg_i + rand_x*(reg_f - reg_i);
+            all_div_indexes[j*n_dim + i] = int_xn;
+            }
+        all_wgts[j] = wgt;
     }
-    return wgt;
 }
+
+
 
 void rebin(const double *rw, const double rc, double *subdivisions) {
     int k = -1;
@@ -120,7 +146,8 @@ int vegas(const int warmup, const int n_dim, const int n_iter, const int n_event
     srand(0);
     double xjac = 1.0/n_events;
     double *divisions;
-    divisions = (double *) calloc(n_dim*BINS_MAX, sizeof(double));
+    // Allocate divisions in unified memory
+    cudaMallocManaged(&divisions, n_dim*BINS_MAX*sizeof(double));
     for( int j = 0; j < n_dim; j++ ){
         divisions[j*BINS_MAX] = 1.0;
     }
@@ -132,6 +159,10 @@ int vegas(const int warmup, const int n_dim, const int n_iter, const int n_event
 
     double total_res = 0.0;
     double total_weight = 0.0;
+
+    // Both threadas and blocks map to the total number of events
+    int threads = 256;
+    int blocks = (n_events + threads - 1)/threads;
 
     for( int k = 0; k < n_iter; k++ ) {
         double res = 0.;
@@ -145,34 +176,29 @@ int vegas(const int warmup, const int n_dim, const int n_iter, const int n_event
         // input arrays
         double *all_randoms, *all_xwgts;
         int NN = n_dim*n_events;
-        cudaMallocManaged(&all_randoms, NN*sizeof(double));
-        cudaMallocManaged(&all_xwgts, n_events*sizeof(double));
-
-        // all_div_indexes never goes into the accelerator
         int *all_div_indexes;
-        all_div_indexes = (int *) malloc(sizeof(int)*NN);
-        for (int i = 0; i < n_events; i++) {
-            all_xwgts[i] = generate_random_array(n_dim, divisions, &all_randoms[i*n_dim], &all_div_indexes[i*n_dim]);
-        }
+        cudaMalloc(&all_randoms, NN*sizeof(double));
+        cudaMalloc(&all_xwgts, n_events*sizeof(double));
+        cudaMallocManaged(&all_div_indexes, NN*sizeof(int));
 
         // output arrays
         double *all_res, *all_res2;
         cudaMallocManaged(&all_res, n_events*sizeof(double));
         cudaMallocManaged(&all_res2, n_events*sizeof(double));
 
-
-        int threads = 256;
-        int blocks = (n_events + threads - 1)/threads;
-
+        // Before going in we might have change divisions so force a sync in
+        cudaDeviceSynchronize();
+        // Generate the random numbers on the GPU
+        generate_random_array_kernel<<<blocks, threads>>>(n_events, n_dim, divisions, all_randoms, all_xwgts, all_div_indexes);
+        // Use them to generate results
         events_kernel<<<blocks, threads>>>(all_randoms, all_xwgts, n_dim, n_events, xjac, all_res, all_res2);
+
+        // Synchronize memory
         cudaDeviceSynchronize();
 
         // Poor's man reduction
-        for (int i = 0; i < n_events; i++) {
-            res += all_res[i];
-            res2 += all_res2[i];
-        }
-
+        res = gpu_double_reduction(n_events, all_res);
+        res2 = gpu_double_reduction(n_events, all_res2);
 
         for (int i = 0; i < n_events; i++) {
             for (int j = 0; j < n_dim; j++) {
@@ -184,7 +210,7 @@ int vegas(const int warmup, const int n_dim, const int n_iter, const int n_event
         cudaFree(all_res2);
         cudaFree(all_xwgts);
         cudaFree(all_randoms);
-        free(all_div_indexes);
+        cudaFree(all_div_indexes);
 
         double err_tmp2 = MAX((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
         sigma = sqrt(err_tmp2);
@@ -205,14 +231,14 @@ int vegas(const int warmup, const int n_dim, const int n_iter, const int n_event
     *final_result = total_res/total_weight;
     *sigma = sqrt(1.0/total_weight);
 
-    free(divisions);
+    cudaFree(divisions);
 
     return 0;
 }
 
 int main(int argc, char *argv[]) {
-    int n_dim = 3;
-    int n_events = (int) 1e4;
+    int n_dim = 7;
+    int n_events = (int) 1e6;
     int n_iter = 5;
 
     double res, sigma;
