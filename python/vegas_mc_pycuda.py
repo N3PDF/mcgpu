@@ -96,7 +96,7 @@ def internal_rand():
     """ Generates a random number """
     return np.random.uniform(0,1)
 
-@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.int64[:]))
+@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.int32[:]))
 def loop(n_events, n_dim,  fres2, all_div_indexes):
     arr_res2 = np.zeros(n_dim * BINS_MAX)
     for i in range(n_events):
@@ -202,8 +202,8 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         NN = n_dim*n_events
         all_randoms = np.empty(NN, dtype=np.float64)
         all_xwgts = np.empty(n_events, dtype=np.float64)
-        all_div_indexes = np.zeros(NN, dtype=np.int64)
-cd .
+        all_div_indexes = np.zeros(NN, dtype=np.int32)
+
         # output arrays
         all_res = np.zeros(n_events)
         all_res2 = np.zeros(n_events)
