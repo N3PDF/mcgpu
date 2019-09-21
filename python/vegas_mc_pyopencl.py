@@ -215,7 +215,7 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         cl_all_div_indexes = pycl_array.to_device(queue, all_div_indexes)
         cl_divisions = pycl_array.to_device(queue, divisions)
 
-        kernelB.generate_random_array_kernel(queue, (blocks,blocks,1), (threads,1,1),
+        kernelB.generate_random_array_kernel(queue, (threads,), (blocks,),
                                              np.int32(n_events), np.int32(n_dim),
                                              cl_divisions.data, cl_all_randoms.data,
                                              cl_all_xwgts.data, cl_all_div_indexes.data)
