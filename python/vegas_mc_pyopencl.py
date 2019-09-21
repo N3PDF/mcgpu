@@ -45,6 +45,18 @@ __kernel void events_kernel(__global const double *all_randoms, __global const d
 kernelB = cl.Program(context, """
 #define BINS_MAX 30
 
+uint MWC64X(uint2 *state)
+{
+    enum { A=4294883355U};
+    uint x=(*state).x, c=(*state).y;  // Unpack the state
+    uint res=x^c;                     // Calculate the result
+    uint hi=mul_hi(x,A);              // Step the RNG
+    x=x*A+c;
+    c=hi+(x<c);
+    *state=(uint2)(x,c);              // Pack the state back up
+    return res;                       // Return the next result
+}
+
 __kernel void generate_random_array_kernel(const int n_events, const int n_dim, __global const double *divisions, __global double *all_randoms, __global double *all_wgts, __global int *all_div_indexes) {
     double reg_i = 0.0;
     double reg_f = 1.0;
@@ -54,13 +66,16 @@ __kernel void generate_random_array_kernel(const int n_events, const int n_dim, 
     int block_size = get_local_size(0);
 
     int index = block_id*block_size + thread_id;
-    int grid_dim = get_local_size(0);
+    int grid_dim = get_num_groups(0);
     int stride = block_size * grid_dim;
+
+    // Use curandState_t to keep track of the seed, which is thread dependent
+    uint2 state = index;
 
     for (int j = index; j < n_events; j+= stride) {
         double wgt = 1.0;
         for (int i = 0; i < n_dim; i++) {
-            double rn = 0; //(double) MWC64X_NextUint(&state)/2147483647./2; //unsigned?
+            double rn = (double) MWC64X(&state)/UINT_MAX; //unsigned?
             double xn = BINS_MAX*(1.0 - rn);
             int int_xn = max(0, min( (int) xn, BINS_MAX));
             double aux_rand = xn - int_xn;
@@ -92,45 +107,6 @@ def loop(n_events, n_dim,  fres2, all_div_indexes):
         for j in range(n_dim):
             arr_res2[j * BINS_MAX + all_div_indexes[i*n_dim + j]] += fres2[i]
     return arr_res2
-
-@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.float64[:], nb.int32[:]))
-def generate_random_array(n_events, n_dim, divisions, x, div_index):
-    """
-    Generates a random array
-    # Arguments in:
-        - n_dim: number of dimensions
-        - divisions: an array defining the grid divisions
-    # Arguments out:
-        - x: array of dimension n_dim with the random number
-        - div_index: array of dimension n_dim with the subdivision
-                     of each point
-    # Returns:
-        - wgt: weight of the point
-    """
-    all_wgts = np.zeros(n_events)
-    for j in range(n_events):
-        reg_i = 0.0
-        reg_f = 1.0
-        wgt = 1.0
-        index = j*n_dim
-        for i in range(n_dim):
-            rn = internal_rand()
-            # Get a random number randomly assigned to a subdivision
-            xn = BINS_MAX*(1.0 - rn)
-            int_xn = max(0, min(int(xn), BINS_MAX))
-            # In practice int_xn = int(xn)-1 unless xn < 1
-            aux_rand = xn - int_xn
-            if int_xn == 0:
-                x_ini = 0.0
-            else:
-                x_ini = divisions[i*BINS_MAX + int_xn - 1]
-            xdelta = divisions[i*BINS_MAX + int_xn] - x_ini
-            rand_x = x_ini + xdelta*aux_rand
-            x[i+index] = reg_i + rand_x*(reg_f - reg_i)
-            wgt *= xdelta*BINS_MAX
-            div_index[i+index] = int_xn
-        all_wgts[j] = wgt
-    return all_wgts
 
 @nb.njit(nb.void(nb.float64[:], nb.float64, nb.float64[:], nb.int64))
 def rebin(rw, rc, subdivisions, index):
@@ -234,21 +210,17 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         all_res = pycl_array.to_device(queue, np.zeros(n_events))
         all_res2 = pycl_array.to_device(queue, np.zeros(n_events))
 
-        all_xwgts = generate_random_array(n_events, n_dim, divisions, all_randoms, all_div_indexes)
-
-        #cl_divisions = pycl_array.to_device(queue, divisions)
         cl_all_randoms = pycl_array.to_device(queue, all_randoms)
-        cl_all_xwgts = pycl_array.to_device(queue, all_xwgts)
+        cl_all_xwgts = pycl_array.to_device(queue, np.zeros(n_events))
         cl_all_div_indexes = pycl_array.to_device(queue, all_div_indexes)
+        cl_divisions = pycl_array.to_device(queue, divisions)
 
-        """
-        kernelB.generate_random_array_kernel(queue, (blocks*threads,blocks*threads,1), (threads,1,1),
+        kernelB.generate_random_array_kernel(queue, (blocks,blocks,1), (threads,1,1),
                                              np.int32(n_events), np.int32(n_dim),
                                              cl_divisions.data, cl_all_randoms.data,
                                              cl_all_xwgts.data, cl_all_div_indexes.data)
-        """
 
-        kernelA.events_kernel(queue, (blocks*threads,blocks*threads,1), (threads,1,1),
+        kernelA.events_kernel(queue, (blocks,blocks,1), (threads,1,1),
                               cl_all_randoms.data, cl_all_xwgts.data, np.int32(n_dim), np.int32(n_events),
                               np.float64(xjac), all_res.data, all_res2.data)
         res = np.sum(all_res)
