@@ -45,6 +45,16 @@ __kernel void events_kernel(__global const double *all_randoms, __global const d
 kernelB = cl.Program(context, """
 #define BINS_MAX 30
 
+double bad_rand(int* seed) // 1 <= *seed < m
+{
+    int const a = 16807; //ie 7**5
+    int const m = 2147483647; //ie 2**31-1
+
+    *seed = (int) ((long) (*seed * a))%m;
+    double rn = (double) *seed / INT_MAX;
+    return (rn + 1.0)/2.0;
+}
+
 uint MWC64X(uint2 *state)
 {
     enum { A=4294883355U};
@@ -71,11 +81,13 @@ __kernel void generate_random_array_kernel(const int n_events, const int n_dim, 
 
     // Use curandState_t to keep track of the seed, which is thread dependent
     uint2 state = index;
+    int seed = index;
 
     for (int j = index; j < n_events; j+= stride) {
         double wgt = 1.0;
         for (int i = 0; i < n_dim; i++) {
-            double rn = (double) MWC64X(&state)/UINT_MAX; //unsigned?
+            //double rn = (double) MWC64X(&state)/UINT_MAX;
+            double rn = bad_rand(&seed); 
             double xn = BINS_MAX*(1.0 - rn);
             int int_xn = max(0, min( (int) xn, BINS_MAX));
             double aux_rand = xn - int_xn;
@@ -192,8 +204,8 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
     total_weight = 0.0
 
     # threads and blocks
-    threads = 256
-    blocks = int((n_events + threads - 1) / threads)
+    threads = 1000
+    grid_size = int((n_events + threads - 1)/threads)*threads
 
     # Loop of iterations
     for k in range(n_iter):
@@ -215,14 +227,19 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         cl_all_div_indexes = pycl_array.to_device(queue, all_div_indexes)
         cl_divisions = pycl_array.to_device(queue, divisions)
 
-        kernelB.generate_random_array_kernel(queue, (threads,), (blocks,),
+
+        kernelB.generate_random_array_kernel(queue, (grid_size,), (threads,),
                                              np.int32(n_events), np.int32(n_dim),
                                              cl_divisions.data, cl_all_randoms.data,
                                              cl_all_xwgts.data, cl_all_div_indexes.data)
+        queue.finish()
 
-        kernelA.events_kernel(queue, (blocks,blocks,1), (threads,1,1),
+        kernelA.events_kernel(queue, (grid_size,), (threads,),
                               cl_all_randoms.data, cl_all_xwgts.data, np.int32(n_dim), np.int32(n_events),
                               np.float64(xjac), all_res.data, all_res2.data)
+
+        queue.finish()
+
         res = np.sum(all_res)
         res2 = np.sum(all_res2)
 
