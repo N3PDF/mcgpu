@@ -239,14 +239,15 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
                               np.float64(xjac), all_res.data, all_res2.data)
 
         queue.finish()
-
-        res = np.sum(all_res)
-        res2 = np.sum(all_res2)
+        aa = all_res.get()
+        bb = all_res2.get()
+        res = np.sum(aa)
+        res2 = np.sum(bb)
 
         arr_res2 = loop(n_events, n_dim, all_res2.get(), cl_all_div_indexes.get())
 
         err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30)
-        sigma = np.sqrt(err_tmp2.get())
+        sigma = np.sqrt(err_tmp2)
         print("Results for interation {0}: {1} +/- {2}".format(k+1, res, sigma))
 
         for j in range(n_dim):
