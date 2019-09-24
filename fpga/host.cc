@@ -10,14 +10,9 @@
 #define BINS_MAX 50
 #define ALPHA 1.5
 
-double internal_rand(){
-    double x = (double) rand()/RAND_MAX;
-    return x;
-}
-
 double* generate_random_array(const int n_events, const int n_dim, const double *divisions, double *x, int *div_index) {
 
-    double *all_wgts = new double[n_events]();
+    double *all_wgts = (double*) aligned_alloc(n_events, n_events * sizeof(double));;
     for (int j = 0; j < n_events; j++)
     {
         double reg_i = 0.0;
@@ -119,62 +114,34 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
     devices.resize(1);
     OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
 
-    /*
-    // These commands will allocate memory on the FPGA. The cl::Buffer objects can
-    // be used to reference the memory locations on the device. The cl::Buffer
-    // object cannot be referenced directly and must be passed to other OpenCL
-    // functions.
+    // This call will extract a kernel out of the program we loaded
+    OCL_CHECK(err, cl::Kernel events_kernel(program, "events_kernel", &err));
+
     OCL_CHECK(err,
-              cl::Buffer buffer_a(context,
-                                  CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
-                                  size_in_bytes,
-                                  source_a.data(),
-                                  &err));
+            cl::Buffer buffer_all_randoms(context,
+                                CL_MEM_READ_ONLY,
+                                sizeof(double) * (n_dim*n_events),
+                                NULL,
+                                &err));
     OCL_CHECK(err,
-              cl::Buffer buffer_b(context,
-                                  CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
-                                  size_in_bytes,
-                                  source_b.data(),
-                                  &err));
+            cl::Buffer buffer_all_xwgts(context,
+                                CL_MEM_READ_ONLY,
+                                sizeof(int) * (n_dim*n_events),
+                                NULL,
+                                &err));
     OCL_CHECK(err,
-              cl::Buffer buffer_result(context,
-                                       CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
-                                       size_in_bytes,
-                                       source_results.data(),
-                                       &err));
+            cl::Buffer buffer_all_res(context,
+                                    CL_MEM_WRITE_ONLY,
+                                    sizeof(double) * n_events,
+                                    NULL,
+                                    &err));
 
-    // This call will extract a kernel out of the program we loaded in the
-    // previous line. A kernel is an OpenCL function that is executed on the
-    // FPGA. This function is defined in the src/vetor_addition.cl file.
-    OCL_CHECK(err, cl::Kernel krnl_vector_add(program, "vector_add", &err));
-
-    //set the kernel Arguments
-    int narg = 0;
-    OCL_CHECK(err, err = krnl_vector_add.setArg(narg++, buffer_result));
-    OCL_CHECK(err, err = krnl_vector_add.setArg(narg++, buffer_a));
-    OCL_CHECK(err, err = krnl_vector_add.setArg(narg++, buffer_b));
-    OCL_CHECK(err, err = krnl_vector_add.setArg(narg++, DATA_SIZE));
-
-    // These commands will load the source_a and source_b vectors from the host
-    // application and into the buffer_a and buffer_b cl::Buffer objects. The data
-    // will be be transferred from system memory over PCIe to the FPGA on-board
-    // DDR memory.
     OCL_CHECK(err,
-              err = q.enqueueMigrateMemObjects({buffer_a, buffer_b},
-                                               0));
-
-    //Launch the Kernel
-    OCL_CHECK(err, err = q.enqueueTask(krnl_vector_add));
-
-    // The result of the previous kernel execution will need to be retrieved in
-    // order to view the results. This call will write the data from the
-    // buffer_result cl_mem object to the source_results vector
-    OCL_CHECK(err,
-              err = q.enqueueMigrateMemObjects({buffer_result},
-                                               CL_MIGRATE_MEM_OBJECT_HOST));
-    q.finish();
-
-    */
+            cl::Buffer buffer_all_res2(context,
+                                    CL_MEM_WRITE_ONLY,
+                                    sizeof(double) * n_events,
+                                    NULL,
+                                    &err));
 
     srand(0);
     double xjac = 1.0/n_events;
@@ -199,29 +166,50 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
 
         // input arrays
         int NN = n_dim*n_events;
-        double *all_randoms = new double[NN];
-        int *all_div_indexes = new int[NN]();
+        //double *all_randoms = new double[NN];
+        double *all_randoms = (double*) aligned_alloc(NN, NN * sizeof(double));
+        int *all_div_indexes = (int*) aligned_alloc(NN, NN * sizeof(int));
+        for (int i = 0; i < NN; i++) all_div_indexes[i] = 0;
 
         // output arrays
-        double *all_res = new double[n_events];
-        double *all_res2 = new double[n_events];
+        double *all_res = (double*) aligned_alloc(n_events, n_events * sizeof(double));
+        double *all_res2 = (double*) aligned_alloc(n_events, n_events * sizeof(double));
 
         double *all_xwgts = generate_random_array(n_events, n_dim, divisions, all_randoms, all_div_indexes);
 
-        for ( int i = 0;  i < n_events; i++ ) {
-            double wgt = all_xwgts[i]*xjac;
-            double a = 0.1;
-            double pref = pow(1.0/a/sqrt(M_PI), n_dim);
-            double coef = 0.0;
-            for (int j = 0; j < n_dim; j++) {
-                coef += pow( (all_randoms[i*n_dim + j] - 1.0/2.0)/a, 2 );
-            }
-            double lepage = pref*exp(-coef);
+        OCL_CHECK(err, err = q.enqueueWriteBuffer(buffer_all_randoms, CL_TRUE, 0, NN*sizeof(double), all_randoms));
+        OCL_CHECK(err, err = q.enqueueWriteBuffer(buffer_all_xwgts, CL_TRUE, 0, n_events*sizeof(double), all_xwgts));
 
-            double tmp = wgt*lepage;
-            all_res[i] = tmp;
-            all_res2[i] = pow(tmp,2);
-        }
+         //set the kernel Arguments
+        int narg = 0;
+        OCL_CHECK(err, err = events_kernel.setArg(narg++, buffer_all_randoms));
+        OCL_CHECK(err, err = events_kernel.setArg(narg++, buffer_all_xwgts));
+        OCL_CHECK(err, err = events_kernel.setArg(narg++, n_dim));
+        OCL_CHECK(err, err = events_kernel.setArg(narg++, n_events));
+        OCL_CHECK(err, err = events_kernel.setArg(narg++, xjac));
+        OCL_CHECK(err, err = events_kernel.setArg(narg++, buffer_all_res));
+        OCL_CHECK(err, err = events_kernel.setArg(narg++, buffer_all_res2));
+
+        // These commands will load the all_randoms and all_xwgts from the host
+        // application and into the buffer_all_randoms and buffer_all_xwgts cl::Buffer objects. The data
+        // will be be transferred from system memory over PCIe to the FPGA on-board
+        // DDR memory.
+        OCL_CHECK(err,
+                err = q.enqueueMigrateMemObjects({buffer_all_randoms, buffer_all_xwgts},
+                                                0));
+
+        // Launch the Kernel
+        OCL_CHECK(err, err = q.enqueueNDRangeKernel(events_kernel, cl::NullRange, cl::NDRange(n_events)));
+
+        // copy result from device to program
+        OCL_CHECK(err,
+                err = q.enqueueMigrateMemObjects({buffer_all_res, buffer_all_res2},
+                                                CL_MIGRATE_MEM_OBJECT_HOST));
+
+        q.finish();
+
+        OCL_CHECK(err, err = q.enqueueReadBuffer(buffer_all_res, CL_TRUE, 0, n_events*sizeof(double), all_res));
+        OCL_CHECK(err, err = q.enqueueReadBuffer(buffer_all_res2, CL_TRUE, 0, n_events*sizeof(double), all_res2));
 
         for (int i = 0; i < n_events; i++)
         {
@@ -245,11 +233,11 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
         total_res += res*wgt_tmp;
         total_weight += wgt_tmp;
 
-        delete[] all_randoms;
-        delete[] all_div_indexes;
-        delete[] all_xwgts;
-        delete[] all_res;
-        delete[] all_res2;
+        free(all_randoms);
+        free(all_div_indexes);
+        free(all_xwgts);
+        free(all_res);
+        free(all_res2);
         delete[] arr_res2;
     }
 
