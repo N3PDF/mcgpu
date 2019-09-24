@@ -29,26 +29,33 @@ double internal_rand(){
     return x;
 }
 
-double generate_random_array(const int n_dim, const double *divisions, double *x, int *div_index) {
-    double reg_i = 0.0;
-    double reg_f = 1.0;
-    double wgt = 1.0;
-    for (int i = 0; i < n_dim; i++) {
-        double rn = internal_rand();
-        double xn = BINS_MAX*(1.0 - rn);
-        int int_xn = MAX(0, MIN( (int) xn, BINS_MAX));
-        double aux_rand = xn - int_xn;
-        double x_ini = 0.0;
-        if (int_xn > 0) {
-            x_ini = divisions[BINS_MAX*i + int_xn-1];
+double* generate_random_array(const int n_events, const int n_dim, const double *divisions, double *x, int *div_index) {
+
+    double *all_wgts = new double[n_events]();
+    for (int j = 0; j < n_events; j++)
+    {
+        double reg_i = 0.0;
+        double reg_f = 1.0;
+        double wgt = 1.0;
+        int index = j*n_dim;
+        for (int i = 0; i < n_dim; i++) {
+            double rn = internal_rand();
+            double xn = BINS_MAX*(1.0 - rn);
+            int int_xn = MAX(0, MIN( (int) xn, BINS_MAX));
+            double aux_rand = xn - int_xn;
+            double x_ini = 0.0;
+            if (int_xn > 0) {
+                x_ini = divisions[BINS_MAX*i + int_xn-1];
+            }
+            double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
+            double rand_x = x_ini + xdelta*aux_rand;
+            x[i+index] = reg_i + rand_x*(reg_f - reg_i);
+            wgt *= xdelta*BINS_MAX;
+            div_index[i+index] = int_xn;
         }
-        double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
-        double rand_x = x_ini + xdelta*aux_rand;
-        x[i] = reg_i + rand_x*(reg_f - reg_i);
-        wgt *= xdelta*BINS_MAX;
-        div_index[i] = int_xn;
+        all_wgts[j] = wgt;
     }
-    return wgt;
+    return all_wgts;
 }
 
 void rebin(const double *rw, const double rc, double *subdivisions) {
@@ -185,8 +192,7 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
 
     srand(0);
     double xjac = 1.0/n_events;
-    double *divisions;
-    divisions = (double *) calloc(n_dim*BINS_MAX, sizeof(double));
+    double *divisions = new double[n_dim*BINS_MAX];
     for( int j = 0; j < n_dim; j++ ){
         divisions[j*BINS_MAX] = 1.0;
     }
@@ -205,55 +211,66 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
         double res2 = 0.;
         double sigma = 0.;
 
-        double *arr_res2;
-        arr_res2 = (double *) calloc(n_dim*BINS_MAX, sizeof(double));
-        int *div_index;
-        double *x;
+        // input arrays
+        int NN = n_dim*n_events;
+        double *all_randoms = new double[NN];
+        int *all_div_indexes = new int[NN]();
 
-        {
-            div_index = (int *) malloc(n_dim*sizeof(int));
-            x = (double *) malloc(n_dim*sizeof(double));
-            for ( int i = 0;  i < n_events; i++ ) {
-                double xwgt;
-                {
-                    xwgt = generate_random_array(n_dim, divisions, x, div_index);
-                }
-                double wgt = xwgt*xjac;
-                double tmp = wgt*lepage_test(x, n_dim);
-                double tmp2 = pow(tmp,2);
-                res += tmp;
-                res2 += tmp2;
+        // output arrays
+        double *all_res = new double[n_events];
+        double *all_res2 = new double[n_events];
 
-                { // array reduction must be done manually in C?
-                    for( int j = 0; j < n_dim; j++ ){
-                        arr_res2[j*BINS_MAX + div_index[j]] += tmp2;
-                    }
-                }
+        double *all_xwgts = generate_random_array(n_events, n_dim, divisions, all_randoms, all_div_indexes);
 
+        for ( int i = 0;  i < n_events; i++ ) {
+            double wgt = all_xwgts[i]*xjac;
+            double a = 0.1;
+            double pref = pow(1.0/a/sqrt(M_PI), n_dim);
+            double coef = 0.0;
+            for (int j = 0; j < n_dim; j++) {
+                coef += pow( (all_randoms[i*n_dim + j] - 1.0/2.0)/a, 2 );
             }
-            free(x);
-            free(div_index);
+            double lepage = pref*exp(-coef);
+
+            double tmp = wgt*lepage;
+            all_res[i] = tmp;
+            all_res2[i] = pow(tmp,2);
         }
+
+        for (int i = 0; i < n_events; i++)
+        {
+            res += all_res[i];
+            res2 += all_res2[i];
+        }
+
+        double *arr_res2 = new double[n_dim*BINS_MAX]();
+        for( int i = 0; i < n_events; i++ )
+            for (int j = 0; j < n_dim; j++)
+                arr_res2[j*BINS_MAX + all_div_indexes[i*n_dim + j]] += all_res2[i];
+
         double err_tmp2 = MAX((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
         sigma = sqrt(err_tmp2);
         printf("For iteration %d, result: %1.5f +- %1.5f\n", k+1, res, sigma);
 
-        for (int j = 0; j < n_dim; j ++) {
+        for (int j = 0; j < n_dim; j ++)
             refine_grid(&arr_res2[j*BINS_MAX], &divisions[j*BINS_MAX]);
-        }
 
         double wgt_tmp = 1.0/pow(sigma, 2);
         total_res += res*wgt_tmp;
         total_weight += wgt_tmp;
 
-        free(arr_res2);
+        delete[] all_randoms;
+        delete[] all_div_indexes;
+        delete[] all_xwgts;
+        delete[] all_res;
+        delete[] all_res2;
+        delete[] arr_res2;
     }
-
 
     *final_result = total_res/total_weight;
     *sigma = sqrt(1.0/total_weight);
 
-    free(divisions);
+    delete[] divisions;
 
     return 0;
 }
