@@ -11,7 +11,7 @@ int main(int argc, char *argv[]) {
         exit(0);
     }
     int n_dim = 3;
-    int n_events = (int) 1e7;
+    int n_events = (int) 1e15;
     int n_iter = atoi(argv[1]);
 
     double res, sigma;
