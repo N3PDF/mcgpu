@@ -87,7 +87,7 @@ __kernel void generate_random_array_kernel(const int n_events, const int n_dim, 
         double wgt = 1.0;
         for (int i = 0; i < n_dim; i++) {
             //double rn = (double) MWC64X(&state)/UINT_MAX;
-            double rn = bad_rand(&seed); 
+            double rn = bad_rand(&seed);
             double xn = BINS_MAX*(1.0 - rn);
             int int_xn = max(0, min( (int) xn, BINS_MAX));
             double aux_rand = xn - int_xn;
@@ -228,13 +228,13 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         cl_divisions = pycl_array.to_device(queue, divisions)
 
 
-        kernelB.generate_random_array_kernel(queue, (grid_size,), (threads,),
+        kernelB.generate_random_array_kernel(queue, (grid_size,), None,
                                              np.int32(n_events), np.int32(n_dim),
                                              cl_divisions.data, cl_all_randoms.data,
                                              cl_all_xwgts.data, cl_all_div_indexes.data)
         queue.finish()
 
-        kernelA.events_kernel(queue, (grid_size,), (threads,),
+        kernelA.events_kernel(queue, (grid_size,), None,
                               cl_all_randoms.data, cl_all_xwgts.data, np.int32(n_dim), np.int32(n_events),
                               np.float64(xjac), all_res.data, all_res2.data)
 
