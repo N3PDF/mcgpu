@@ -10,6 +10,11 @@
 #define BINS_MAX 50
 #define ALPHA 1.5
 
+double internal_rand(){
+    double x = (double) rand()/RAND_MAX;
+    return x;
+}
+
 double* generate_random_array(const int n_events, const int n_dim, const double *divisions, double *x, int *div_index) {
 
     double *all_wgts = (double*) aligned_alloc(n_events, n_events * sizeof(double));;
