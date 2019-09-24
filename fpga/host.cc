@@ -1,31 +1,108 @@
 #include "xcl2.h"
-#include <vector>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <sys/param.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/time.h>
 
-using std::vector;
+#define BINS_MAX 50
+#define ALPHA 1.5
 
-static const int DATA_SIZE = 1024;
-static const std::string error_message =
-    "Error: Result mismatch:\n"
-    "i = %d CPU result = %d Device result = %d\n";
-
-// This example illustrates the very simple OpenCL example that performs
-// an addition on two vectors
-int main(int argc, char **argv) {
-
-    if (argc != 2) {
-        std::cout << "Usage: " << argv[0] << " <XCLBIN File>" << std::endl;
-        return EXIT_FAILURE;
+double lepage_test(double x[], int n) {
+    double a = 0.1;
+    double pref = pow(1.0/a/sqrt(M_PI), n);
+    double coef = 0.0;
+    for (int i = 1; i <= 100*n; i++) {
+        coef += (float) i;
     }
+    for (int i = 0; i < n; i++) {
+        coef += pow((x[i] - 1.0/2.0)/a, 2);
+    }
+    coef -= 100.0*n*(100.0*n+1.0)/2.0;
+    return pref*exp(-coef);
+}
 
-    std::string binaryFile = argv[1];
-    // compute the size of array in bytes
-    size_t size_in_bytes = DATA_SIZE * sizeof(int);
+double internal_rand(){
+    double x = (double) rand()/RAND_MAX;
+    return x;
+}
+
+double generate_random_array(const int n_dim, const double *divisions, double *x, int *div_index) {
+    double reg_i = 0.0;
+    double reg_f = 1.0;
+    double wgt = 1.0;
+    for (int i = 0; i < n_dim; i++) {
+        double rn = internal_rand();
+        double xn = BINS_MAX*(1.0 - rn);
+        int int_xn = MAX(0, MIN( (int) xn, BINS_MAX));
+        double aux_rand = xn - int_xn;
+        double x_ini = 0.0;
+        if (int_xn > 0) {
+            x_ini = divisions[BINS_MAX*i + int_xn-1];
+        }
+        double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
+        double rand_x = x_ini + xdelta*aux_rand;
+        x[i] = reg_i + rand_x*(reg_f - reg_i);
+        wgt *= xdelta*BINS_MAX;
+        div_index[i] = int_xn;
+    }
+    return wgt;
+}
+
+void rebin(const double *rw, const double rc, double *subdivisions) {
+    int k = -1;
+    double dr = 0.0;
+    double aux[BINS_MAX];
+    for (int i = 0; i < BINS_MAX-1; i++){
+        double old_xi = 0.0;
+        while (rc > dr) {
+            k += 1;
+            dr += rw[k];
+        }
+        if (k > 0) {
+            old_xi = subdivisions[k-1];
+        }
+        double old_xf = subdivisions[k];
+        dr -= rc;
+        double delta_x = old_xf - old_xi;
+        aux[i] = old_xf - delta_x*(dr / rw[k]);
+    }
+    aux[BINS_MAX-1] = 1.0;
+    for (int i = 0; i < BINS_MAX; i ++) {
+        subdivisions[i] = aux[i];
+    }
+}
+
+void refine_grid(const double *res_sq, double *subdivisions){
+    double aux[BINS_MAX];
+    double tmp = (res_sq[0] + res_sq[1])/2.0;
+    double aux_sum = tmp;
+    aux[0] = tmp;
+    for (int i = 1; i < BINS_MAX-1; i++) {
+        tmp = MAX( (res_sq[i-1]+res_sq[i]+res_sq[i+1])/3.0, 1e-30 );
+        aux_sum += tmp;
+        aux[i] = tmp;
+    }
+    tmp = (res_sq[BINS_MAX-2] + res_sq[BINS_MAX-1])/2.0;
+    aux_sum += tmp;
+    aux[BINS_MAX-1] = tmp;
+    double rw[BINS_MAX];
+    double rc = 0.0;
+    for (int i = 0; i < BINS_MAX-1; i ++) {
+        tmp = pow( (1.0 - aux[i]/aux_sum)/(log(aux_sum) - log(aux[i])), ALPHA );
+        rw[i] = tmp;
+        rc += tmp;
+    }
+    rc = rc/BINS_MAX;
+    rebin(rw, rc, subdivisions);
+}
+
+int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n_iter, const int n_events, double *final_result, double *sigma) {
+
+    // init OCL device
     cl_int err;
-
-    // Creates a vector of DATA_SIZE elements with an initial value of 10 and 32
-    vector<int, aligned_allocator<int>> source_a(DATA_SIZE, 10);
-    vector<int, aligned_allocator<int>> source_b(DATA_SIZE, 32);
-    vector<int, aligned_allocator<int>> source_results(DATA_SIZE);
 
     // The get_xil_devices will return vector of Xilinx Devices
     auto devices = xcl::get_xil_devices();
@@ -49,6 +126,7 @@ int main(int argc, char **argv) {
     devices.resize(1);
     OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
 
+    /*
     // These commands will allocate memory on the FPGA. The cl::Buffer objects can
     // be used to reference the memory locations on the device. The cl::Buffer
     // object cannot be referenced directly and must be passed to other OpenCL
@@ -90,7 +168,7 @@ int main(int argc, char **argv) {
     // DDR memory.
     OCL_CHECK(err,
               err = q.enqueueMigrateMemObjects({buffer_a, buffer_b},
-                                               0 /* 0 means from host*/));
+                                               0));
 
     //Launch the Kernel
     OCL_CHECK(err, err = q.enqueueTask(krnl_vector_add));
@@ -103,21 +181,115 @@ int main(int argc, char **argv) {
                                                CL_MIGRATE_MEM_OBJECT_HOST));
     q.finish();
 
-    int match = 0;
-    printf("Result = \n");
-    for (int i = 0; i < DATA_SIZE; i++) {
-        int host_result = source_a[i] + source_b[i];
-        if (source_results[i] != host_result) {
-            printf(error_message.c_str(), i, host_result, source_results[i]);
-            match = 1;
-            break;
-        } else {
-            printf("%d ", source_results[i]);
-            if (((i + 1) % 16) == 0)
-                printf("\n");
-        }
+    */
+
+    srand(0);
+    double xjac = 1.0/n_events;
+    double *divisions;
+    divisions = (double *) calloc(n_dim*BINS_MAX, sizeof(double));
+    for( int j = 0; j < n_dim; j++ ){
+        divisions[j*BINS_MAX] = 1.0;
+    }
+    // fake initialization at the beginning
+    double rw_tmp[BINS_MAX];
+    std::fill_n(rw_tmp, BINS_MAX, 1.0);
+    for( int j = 0; j < n_dim; j++ ){
+        rebin(rw_tmp, 1.0/BINS_MAX, &divisions[j*BINS_MAX]);
     }
 
-    std::cout << "TEST " << (match ? "FAILED" : "PASSED") << std::endl;
-    return (match ? EXIT_FAILURE : EXIT_SUCCESS);
+    double total_res = 0.0;
+    double total_weight = 0.0;
+
+    for( int k = 0; k < n_iter; k++ ) {
+        double res = 0.;
+        double res2 = 0.;
+        double sigma = 0.;
+
+        double *arr_res2;
+        arr_res2 = (double *) calloc(n_dim*BINS_MAX, sizeof(double));
+        int *div_index;
+        double *x;
+
+        {
+            div_index = (int *) malloc(n_dim*sizeof(int));
+            x = (double *) malloc(n_dim*sizeof(double));
+            for ( int i = 0;  i < n_events; i++ ) {
+                double xwgt;
+                {
+                    xwgt = generate_random_array(n_dim, divisions, x, div_index);
+                }
+                double wgt = xwgt*xjac;
+                double tmp = wgt*lepage_test(x, n_dim);
+                double tmp2 = pow(tmp,2);
+                res += tmp;
+                res2 += tmp2;
+
+                { // array reduction must be done manually in C?
+                    for( int j = 0; j < n_dim; j++ ){
+                        arr_res2[j*BINS_MAX + div_index[j]] += tmp2;
+                    }
+                }
+
+            }
+            free(x);
+            free(div_index);
+        }
+        double err_tmp2 = MAX((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
+        sigma = sqrt(err_tmp2);
+        printf("For iteration %d, result: %1.5f +- %1.5f\n", k+1, res, sigma);
+
+        for (int j = 0; j < n_dim; j ++) {
+            refine_grid(&arr_res2[j*BINS_MAX], &divisions[j*BINS_MAX]);
+        }
+
+        double wgt_tmp = 1.0/pow(sigma, 2);
+        total_res += res*wgt_tmp;
+        total_weight += wgt_tmp;
+
+        free(arr_res2);
+    }
+
+
+    *final_result = total_res/total_weight;
+    *sigma = sqrt(1.0/total_weight);
+
+    free(divisions);
+
+    return 0;
+}
+
+
+
+// This example illustrates the very simple OpenCL example that performs
+// an addition on two vectors
+int main(int argc, char **argv) {
+
+    if (argc != 2) {
+        std::cout << "Usage: " << argv[0] << " <XCLBIN File>" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    std::string binaryFile = argv[1];
+    // compute the size of array in bytes
+
+    int n_dim = 4;
+    int n_events = (int) 1e6;
+    int n_iter = 5;
+
+    double res, sigma;
+    struct timeval start, stop;
+
+    gettimeofday(&start, 0);
+    int state = vegas(binaryFile, 1, n_dim, n_iter, n_events, &res, &sigma);
+    gettimeofday(&stop, 0);
+
+    if (state != 0) {
+       printf("Something went wrong\n");
+    }
+
+    printf("Final result: %1.5f +- %1.5f\n", res, sigma);
+    double result = (stop.tv_sec - start.tv_sec) + (stop.tv_usec - start.tv_usec)*1e-6;
+    printf("It took: %1.7f seconds\n", result);
+
+    return 0;
 }

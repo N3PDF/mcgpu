@@ -119,10 +119,10 @@ build: $(BINARY_CONTAINERS)
 # Building kernel
 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
 	mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k vector_add -I'$(<D)' -o'$@' '$<'
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k events_kernel -I'$(<D)' -o'$@' '$<'
 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(BINARY_CONTAINER_bitstream_OBJS)
 	mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk vector_add:1 -o'$@' $(+)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk events_kernel:1 -o'$@' $(+)
 
 # Building Host
 $(EXECUTABLE): check-xrt $(HOST_SRCS) $(HOST_HDRS)
