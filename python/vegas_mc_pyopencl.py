@@ -55,18 +55,6 @@ double bad_rand(int* seed) // 1 <= *seed < m
     return (rn + 1.0)/2.0;
 }
 
-uint MWC64X(uint2 *state)
-{
-    enum { A=4294883355U};
-    uint x=(*state).x, c=(*state).y;  // Unpack the state
-    uint res=x^c;                     // Calculate the result
-    uint hi=mul_hi(x,A);              // Step the RNG
-    x=x*A+c;
-    c=hi+(x<c);
-    *state=(uint2)(x,c);              // Pack the state back up
-    return res;                       // Return the next result
-}
-
 __kernel void generate_random_array_kernel(const int n_events, const int n_dim, __global const double *divisions, __global double *all_randoms, __global double *all_wgts, __global int *all_div_indexes) {
     double reg_i = 0.0;
     double reg_f = 1.0;
@@ -80,13 +68,11 @@ __kernel void generate_random_array_kernel(const int n_events, const int n_dim, 
     int stride = block_size * grid_dim;
 
     // Use curandState_t to keep track of the seed, which is thread dependent
-    uint2 state = index;
     int seed = index;
 
     for (int j = index; j < n_events; j+= stride) {
         double wgt = 1.0;
         for (int i = 0; i < n_dim; i++) {
-            //double rn = (double) MWC64X(&state)/UINT_MAX;
             double rn = bad_rand(&seed);
             double xn = BINS_MAX*(1.0 - rn);
             int int_xn = max(0, min( (int) xn, BINS_MAX));
