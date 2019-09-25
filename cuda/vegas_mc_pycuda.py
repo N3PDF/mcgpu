@@ -14,11 +14,11 @@ ALPHA = 0.1
 f = open('kernel.cu', 'r')
 kernel_str = f.read()
 f.close()
-mod = SourceModule(kernel_str, no_extern_c=True)
+kernel = SourceModule(kernel_str, no_extern_c=True)
 
 
-events_kernel = mod.get_function("events_kernel")
-generate_random_array_kernel = mod.get_function("generate_random_array_kernel")
+events_kernel = kernel.get_function("events_kernel")
+generate_random_array_kernel = kernel.get_function("generate_random_array_kernel")
 
 @nb.njit(nb.float64())
 def internal_rand():

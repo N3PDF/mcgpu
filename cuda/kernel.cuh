@@ -1,5 +1,4 @@
 #define BINS_MAX 30
-#define ALPHA 0.1
 
 extern "C" {
     __global__ 

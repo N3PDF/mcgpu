@@ -8,6 +8,8 @@
 // Cuda includes
 #include "kernel.cuh"
 
+#define ALPHA 0.1
+
 double gpu_double_reduction(const int array_size, const double *target_array) {
     // Make sense only for arrays which are in the GPU already
     double res = 0;
