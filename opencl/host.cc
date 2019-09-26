@@ -229,12 +229,12 @@ int main(int argc, char **argv) {
         exit(0);
     }
     string kernel_file = "kernel.cl";
-    if (argc == 4) {
+    if (argc > 3) {
         // Careful, this will run even if the file does not exist
         kernel_file = argv[3];
     }
     int device_idx = 0;
-    if (argc == 5) {
+    if (argc > 4) {
         device_idx = atoi(argv[4]);
     }
     int n_events = atoi(argv[1]);

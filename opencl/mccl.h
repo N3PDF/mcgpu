@@ -8,7 +8,6 @@
 // some testing is needed, but it might be avoided
 #define CL_HPP_ENABLE_PROGRAM_CONSTRUCTION_FROM_ARRAY_COMPATIBILITY 1 
 #include <CL/cl2.hpp> 
-#include <CL/cl_ext_xilinx.h>
 
 // Generic utilities
 std::string read_file_to_str(const std::string &file_name);

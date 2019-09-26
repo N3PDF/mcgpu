@@ -68,8 +68,8 @@ cl::Program read_program_from_file(const string &file_name, cl::Context ctx, cl:
 }
 cl::Program read_program_from_bin(const string &file_name, cl::Context ctx, cl::Device device) {
     /* Wrapper around OpenCL program creation to read a binary kernel */
-    // Copied from xilinx header because the compilation is not working for me????
-    std::ifstream bin_file(file_name.c_str(), ifstream::binary);
+    cout << "Loading " << file_name << endl;
+    ifstream bin_file(file_name.c_str(), ifstream::binary);
     bin_file.seekg(0, bin_file.end);
     auto nb = bin_file.tellg();
     bin_file.seekg(0, bin_file.beg);
