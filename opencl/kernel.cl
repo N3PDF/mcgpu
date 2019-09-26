@@ -1,4 +1,5 @@
 #define BINS_MAX 30
+#define M_PI 3.14159265358979323846
 
 // Kernel to be run per event
 __kernel void events_kernel(__global const double *all_randoms, __global const double *all_xwgts, int n, int n_events, double xjac, __global double *all_res, __global double *all_res2) {

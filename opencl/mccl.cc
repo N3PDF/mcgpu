@@ -30,16 +30,13 @@ cl::Platform platform_selection(const int sel) {
     for (int i = 0; i < total; i++) {
         cout << "[" << i << "] " << platforms[i].getInfo<CL_PLATFORM_NAME>(&err) << endl;
     }
-    if (sel < 0) {
-        int mine = -1;
-        while (mine >= total || mine < 0) { 
-            cout << "Which platform do you want to use? ([" << 0 << "-" << total-1 <<"]): ";
-            cin >> mine;
-        }
-        return platforms[mine];
-    } else {
-        return platforms[sel];
+    int mine = sel;
+    while (mine >= total || mine < 0) {
+        cout << "Which platform do you want to use? ([" << 0 << "-" << total-1 <<"]): ";
+        cin >> mine;
     }
+    cout << "Selected: " << platforms[mine].getInfo<CL_PLATFORM_NAME>(&err) << endl;
+    return platforms[mine];
 }
 cl::Platform platform_selection() { return platform_selection(-1); };
 
@@ -51,7 +48,6 @@ cl::Device device_selection(const int platform_sel, const int device_sel) {
     return devices[device_sel];
 }
 cl::Device get_default_device(const int platform_sel) {
-    auto platform = platform_selection(platform_sel);
     return device_selection(platform_sel, 0);
 }
 
@@ -80,6 +76,7 @@ cl::Program read_program_from_bin(const string &file_name, cl::Context ctx, cl::
     vector<unsigned char> buf;
     buf.resize(nb);
     bin_file.read(reinterpret_cast<char*>(buf.data()), nb);
+
     cl::Program::Binaries bins{{buf.data(), buf.size()}};
     int err;
     vector<cl::Device> devices = {device};

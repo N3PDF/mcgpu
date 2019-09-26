@@ -95,7 +95,7 @@ void refine_grid(const double *res_sq, double *subdivisions){
     rebin(rw, rc, subdivisions);
 }
 
-int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n_iter, const int n_events, double *final_result, double *sigma) {
+int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events, double *final_result, double *sigma) {
     // Auxiliary variables
     int NN = n_dim*n_events;
     int err;
@@ -103,12 +103,17 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
     // OpenCL initialization
 
     // Read the device 
-    auto device = get_default_device(0); // platform 0 == GPU
+    auto device = get_default_device(device_idx); // platform 0 == GPU
 
     // Create context, queue and program
     cl::Context context( {device} );
     cl::CommandQueue q(context, device);
-    cl::Program program = read_program_from_file("kernel.cl", context, device);
+    cl::Program program;
+    if (device_idx == 1) {
+        program = read_program_from_file(kernel_file, context, device);
+    } else {
+        program = read_program_from_file(kernel_file, context, device);
+    }
 
     // Red the kernel out of the program
     cl::Kernel kernel(program, "events_kernel", &err);
@@ -219,22 +224,28 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
 
 int main(int argc, char **argv) {
 
-    if (argc < 2) {
-        fprintf(stderr, "usage %s number_of_events number_of_dimensions\n", argv[0]);
+    if (argc < 3 || argc > 5) {
+        fprintf(stderr, "usage %s number_of_events number_of_dimensions kernel_file device\n", argv[0]);
         exit(0);
+    }
+    string kernel_file = "kernel.cl";
+    if (argc == 4) {
+        // Careful, this will run even if the file does not exist
+        kernel_file = argv[3];
+    }
+    int device_idx = 0;
+    if (argc == 5) {
+        device_idx = atoi(argv[4]);
     }
     int n_events = atoi(argv[1]);
     int n_dim = atoi(argv[2]);
     int n_iter = 5;
 
-    std::string binaryFile = "host.cc";
-    // compute the size of array in bytes
-
     double res, sigma;
     struct timeval start, stop;
 
     gettimeofday(&start, 0);
-    int state = vegas(binaryFile, 1, n_dim, n_iter, n_events, &res, &sigma);
+    int state = vegas(kernel_file, device_idx, 1, n_dim, n_iter, n_events, &res, &sigma);
     gettimeofday(&stop, 0);
 
     if (state != 0) {
