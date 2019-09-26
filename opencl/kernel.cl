@@ -29,9 +29,8 @@ __kernel void events_kernel(__global const double *all_randoms, __global const d
 }
 
 // testing kernel
-__kernel void trial(__global double *all_res) {
+__kernel void trial() {
     printf("ciao");
-    all_res[4] = 0.4;
 }
 
 

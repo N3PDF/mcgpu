@@ -5,7 +5,7 @@ EVENTS=1000000
 DIMENSIONS=7
 
 TARGET= cpp-opencl
-SRC = host.cc
+SRC = host.cc mccl.cc
 
 .PHONY: all clean run-cpp run-python
 
