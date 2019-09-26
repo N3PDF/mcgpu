@@ -11,8 +11,11 @@ DEVICE:=xilinx_u280_xdma_201910_1
 ECHO:= @echo
 help::
 	$(ECHO) "Makefile Usage:"
-	$(ECHO) "  make run-cpp"
-	$(ECHO) "      compiles and run the CPP (GPU by default) program "
+	$(ECHO) "  make run-gpu"
+	$(ECHO) "      compiles and run the CPP program in GPU"
+	$(ECHO) ""
+	$(ECHO) "  make run-cpu"
+	$(ECHO) "      compiles and run the CPP program in CPU"
 	$(ECHO) ""
 	$(ECHO) "  make run-python"
 	$(ECHO) "      compiles and run the pyopencl version of the program "
@@ -60,19 +63,22 @@ HOST_SRCS = host.cc mccl.cc
 
 ##########################
 ### Xilinx specific options
+device2dsa = $(strip $(patsubst %.xpfm, % , $(shell basename $(DEVICE))))
 #   device2dsa - create a filesystem friendly name from device name
 #   $(1) - full name of device
 DSA := $(call device2dsa, $(DEVICE))
 BUILD_DIR := ./_x.$(TARGET).$(DSA)
 
 BUILD_DIR_bitstream = $(BUILD_DIR)/bitstream
-device2dsa = $(strip $(patsubst %.xpfm, % , $(shell basename $(DEVICE))))
 # Xilinx specific libraries and includes (note that for xilinx opencl comes from a different place)
 OPENCL_INCLUDE:= $(XILINX_XRT)/include/
 VIVADO_INCLUDE:= $(XILINX_VIVADO)/include/
+
 opencl_CXXFLAGS=-I$(OPENCL_INCLUDE) -I$(VIVADO_INCLUDE)
+
 OPENCL_LIB:=$(XILINX_XRT)/lib/
 opencl_LDFLAGS=-L$(OPENCL_LIB) -lOpenCL -lpthread
+
 CXXFLAGS += $(opencl_CXXFLAGS)
 LDFLAGS += $(opencl_LDFLAGS)
 
@@ -85,14 +91,13 @@ CLFLAGS += -t $(TARGET) --platform $(DEVICE) --save-temps
 
 EXECUTABLE = driver
 CMD_ARGS = $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
+
 EMCONFIG_DIR = $(XCLBIN)/$(DSA)
 
 BINARY_CONTAINERS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 
 ##########################
-
-
 
 #Generates profile summary report
 ifeq ($(PROFILE), yes)
@@ -144,7 +149,7 @@ $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(BINARY_CONTAINER_bitstream_OBJS)
 
 # Building Host
 $(EXECUTABLE): check-xrt $(HOST_SRCS) $(HOST_HDRS)
-	$(CXX) $(CXXFLAGS) $(HOST_SRCS) $(HOST_HDRS) -o '$@' $(LDFLAGS)
+	$(XXX) $(CXXFLAGS) $(HOST_SRCS) $(HOST_HDRS) -o '$@' $(LDFLAGS)
 
 emconfig:$(EMCONFIG_DIR)/emconfig.json
 $(EMCONFIG_DIR)/emconfig.json:
@@ -152,8 +157,8 @@ $(EMCONFIG_DIR)/emconfig.json:
 
 check: xilinx
 ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
-	$(CP) $(EMCONFIG_DIR)/emconfig.json .
-	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
+	cp -rf $(EMCONFIG_DIR)/emconfig.json .
+	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) $(EVENTS) $(DIMENSIONS) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
 else
 	 ./$(EXECUTABLE) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 endif

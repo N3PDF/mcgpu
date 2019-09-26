@@ -110,7 +110,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     cl::CommandQueue q(context, device);
     cl::Program program;
     if (device_idx == 1) {
-        program = read_program_from_file(kernel_file, context, device);
+        program = read_program_from_bin(kernel_file, context, device);
     } else {
         program = read_program_from_file(kernel_file, context, device);
     }
