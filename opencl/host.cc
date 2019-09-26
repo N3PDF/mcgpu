@@ -100,30 +100,15 @@ int vegas(std::string binaryFile, const int warmup, const int n_dim, const int n
     int NN = n_dim*n_events;
     int err;
 
-    // Do OCL initialization
-    vector<cl::Platform> platforms;
-    cl::Platform::get(&platforms);
-    cout << "Found " << platforms.size() << " platforms. Using default" << endl;
-    cl::Platform platform = platforms[0];
-    cout << "Using " << platform.getInfo<CL_PLATFORM_NAME>() << endl;
+    // OpenCL initialization
 
-    vector<cl::Device> devices;
-    platform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
-    cout << "Found " << devices.size() << " devices. Using default" << endl;
-    cl::Device device = devices[0];
-    cout << "Using " << device.getInfo<CL_DEVICE_NAME>() << endl;
+    // Read the device 
+    auto device = get_default_device(0); // platform 0 == GPU
 
+    // Create context, queue and program
     cl::Context context( {device} );
     cl::CommandQueue q(context, device);
-
-    cl::Program program = read_program_from_file("kernel.cl", context);
-    if(program.build({device}) != CL_SUCCESS) {
-        cout << "There was an error when building the program" << endl;
-        cout << "Log info: " << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(device) << endl;
-        exit(1);
-    }
-
-
+    cl::Program program = read_program_from_file("kernel.cl", context, device);
 
     // Red the kernel out of the program
     cl::Kernel kernel(program, "events_kernel", &err);
