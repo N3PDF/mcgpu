@@ -16,7 +16,7 @@ string read_file_to_str(const string &file_name) {
     return buffer.str();
 }
 
-cl::Platform platform_selection(const int sel) {
+cl::Platform platform_selection(const int sel = -1) {
     /* Finds all platforms available in the system
      * and asks the user which one wants to use
      *
@@ -38,7 +38,6 @@ cl::Platform platform_selection(const int sel) {
     cout << "Selected: " << platforms[mine].getInfo<CL_PLATFORM_NAME>(&err) << endl;
     return platforms[mine];
 }
-cl::Platform platform_selection() { return platform_selection(-1); };
 
 cl::Device device_selection(const int platform_sel, const int device_sel) {
     /* Wrapper around platform_selection to obtain directly a device */

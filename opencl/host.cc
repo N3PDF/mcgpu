@@ -211,8 +211,9 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         free(all_res);
         free(all_res2);
 
-                delete[] arr_res2;
+        delete[] arr_res2;
     }
+
 
     *final_result = total_res/total_weight;
     *sigma = sqrt(1.0/total_weight);

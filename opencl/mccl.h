@@ -14,7 +14,6 @@ std::string read_file_to_str(const std::string &file_name);
 
 // Device and platform selection wrappers
 cl::Platform platform_selection(const int sel);
-cl::Platform platform_selection();
 cl::Device device_selection(const int platform_sel, const int device_sel);
 cl::Device get_default_device(const int platform_sel);
 
