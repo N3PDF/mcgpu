@@ -57,11 +57,12 @@ endif
 XXX = $(XILINX_SDX)/bin/xcpp
 XOCC = $(XILINX_SDX)/bin/xocc
 
-# Some target
+# Some targets
 TARGET_CPP = cpp-opencl
 XCLBIN = ./xclbin
 KERNEL_SRC = kernel.cl
-KERNEL_BIN = kernel.bin
+KERNEL_NAMES = events_kernel generate_random_array_kernel
+KERNEL_BINS = $(addprefix $(XCLBIN)/$(TARGET)_, $(addsuffix .xo, $(KERNEL_NAMES)))
 
 # C source files
 HOST_SRCS = host.cc mccl.cc
@@ -116,41 +117,48 @@ endif
 
 ##### if making driver or xilinx, check the correct enviromental variables are set
 #Checks for XILINX_SDX
-ifndef XILINX_SDX
-$(error XILINX_SDX variable is not set, please set correctly and rerun)
-endif
-#Checks for XILINX_XRT
-check-xrt:
-ifndef XILINX_XRT
-	$(error XILINX_XRT variable is not set, please set correctly and rerun)
-endif
-check-devices:
-ifndef DEVICE
-	$(error DEVICE not set. Please set the DEVICE properly and rerun. Run "make help" for more details.)
-endif
-check-aws_repo:
-ifndef SDACCEL_DIR
-	$(error SDACCEL_DIR not set. Please set it properly and rerun. Run "make help" for more details.)
-endif
+# ifndef XILINX_SDX
+# $(error XILINX_SDX variable is not set, please set correctly and rerun)
+# endif
+# #Checks for XILINX_XRT
+# check-xrt:
+# ifndef XILINX_XRT
+# 	$(error XILINX_XRT variable is not set, please set correctly and rerun)
+# endif
+# check-devices:
+# ifndef DEVICE
+# 	$(error DEVICE not set. Please set the DEVICE properly and rerun. Run "make help" for more details.)
+# endif
+# check-aws_repo:
+# ifndef SDACCEL_DIR
+# 	$(error SDACCEL_DIR not set. Please set it properly and rerun. Run "make help" for more details.)
+# endif
 ########
 
 
-.PHONY: xilinx clean cleanall emconfig
-xilinx: check-devices $(EXECUTABLE) $(BINARY_CONTAINERS) emconfig
-
-.PHONY: exe
+.PHONY: xilinx clean cleanall emconfig exe
 exe: $(EXECUTABLE)
+xilinx: $(exe) $(BINARY_CONTAINERS) emconfig
+
 
 build: $(BINARY_CONTAINERS)
 
 ########################################################## MORE XILINX SPECIFIC STUFF
 # Building kernel
-$(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
+$(XCLBIN)/$(TARGET)_%.xo: $(KERNEL_SRC)
 	mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k events_kernel -I'$(<D)' -o'$@' '$<'
-$(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(BINARY_CONTAINER_bitstream_OBJS)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k $* -I'$(<D)' -o'$@' '$<'
+
+$(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
 	mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk events_kernel:1 -o'$@' $(+)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) -o'$@' $(+)
+
+# $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
+# 	mkdir -p $(XCLBIN)
+# 	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k events_kernel -I'$(<D)' -o'$@' '$<'
+# $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(BINARY_CONTAINER_bitstream_OBJS)
+# 	mkdir -p $(XCLBIN)
+# 	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk events_kernel:1 -o'$@' $(+)
 
 # Building Host
 $(EXECUTABLE): check-xrt $(HOST_SRCS) $(HOST_HDRS)
@@ -160,10 +168,10 @@ emconfig:$(EMCONFIG_DIR)/emconfig.json
 $(EMCONFIG_DIR)/emconfig.json:
 	emconfigutil --platform $(DEVICE) --od $(EMCONFIG_DIR)
 
-check: xilinx
+check: 
 ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
 	cp -rf $(EMCONFIG_DIR)/emconfig.json .
-	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) $(EVENTS) $(DIMENSIONS) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
+	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) 10000 4 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
 else
 	 ./$(EXECUTABLE) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 endif
