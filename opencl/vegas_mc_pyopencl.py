@@ -23,7 +23,7 @@ def internal_rand():
     """ Generates a random number """
     return np.random.uniform(0,1)
 
-@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.int32[:]))
+@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.int16[:]))
 def loop(n_events, n_dim,  fres2, all_div_indexes):
     arr_res2 = np.zeros(n_dim * BINS_MAX)
     for i in range(n_events):
@@ -127,7 +127,7 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         # input arrays
         NN = n_dim*n_events
         all_randoms = np.empty(NN, dtype=np.float64)
-        all_div_indexes = np.zeros(NN, dtype=np.int32)
+        all_div_indexes = np.zeros(NN, dtype=np.int16)
 
         # output arrays
         all_res = pycl_array.to_device(queue, np.zeros(n_events))
@@ -212,6 +212,7 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument("-n", "--ncalls", help = "Number of events", default = int(1e6), type = int)
+    parser.add_argument("-i", "--niters", help = "Number of iterations", default = 5, type = int)
     parser.add_argument("-d", "--dimensions", help = "Number of dimensions", default = 7, type = int)
     # Not used at the moment
     parser.add_argument("--xlow", default = 0.0, type = float)
@@ -225,7 +226,7 @@ if __name__ == '__main__':
     print(f'VEGAS MC numba, ncalls={ncalls}, dimensions={dim}:')
     start = time.time()
     v = make_vegas(dim=dim, xl = xlow, xu = xupp)
-    r = v.integrate(calls=ncalls)
+    r = v.integrate(calls=ncalls, iters=args.niters)
     end = time.time()
     print(r)
     print(f'time (s): {end-start}')

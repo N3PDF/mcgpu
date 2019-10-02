@@ -10,8 +10,8 @@
 using namespace std;
 
 
-#define BINS_MAX 50
-#define ALPHA 1.5
+#define BINS_MAX 30
+#define ALPHA 0.1
 
 double internal_rand(){
     double x = (double) rand()/RAND_MAX;
@@ -117,17 +117,23 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
     // Red the kernel out of the program
     cl::Kernel kernel(program, "events_kernel", &err);
+    cl::Kernel randomer(program, "generate_random_array_kernel", &err);
 
     // Now allocate the memory buffers on the device
-    cl::Buffer buffer_all_randoms(context, CL_MEM_READ_ONLY, sizeof(double) * NN, NULL, &err);
-    cl::Buffer buffer_all_xwgts(context, CL_MEM_READ_ONLY, sizeof(double) * n_events, NULL, &err);
+    // Copy-IN buffer
+    cl::Buffer buffer_divisions(context, CL_MEM_READ_ONLY, sizeof(double) * BINS_MAX * n_dim, NULL, &err);
+    // Copy-OUT buffers
+    cl::Buffer buffer_all_div_indexes(context, CL_MEM_READ_WRITE, sizeof(short) * NN, NULL, &err);
     cl::Buffer buffer_all_res(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
     cl::Buffer buffer_all_res2(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
+    // in-device usage buffers (never copied in or out)
+    cl::Buffer buffer_all_randoms(context, CL_MEM_READ_WRITE, sizeof(double) * NN, NULL, &err);
+    cl::Buffer buffer_all_xwgts(context, CL_MEM_READ_WRITE, sizeof(double) * n_events, NULL, &err);
     // end OCL initialization
 
     srand(0);
     double xjac = 1.0/n_events;
-    double *divisions = new double[n_dim*BINS_MAX];
+    double *divisions = (double*) aligned_alloc(n_dim*BINS_MAX, n_dim*BINS_MAX*sizeof(double));
     for( int j = 0; j < n_dim; j++ ){
         divisions[j*BINS_MAX] = 1.0;
     }
@@ -141,28 +147,37 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     double total_res = 0.0;
     double total_weight = 0.0;
 
+
+    // Array initialization
+    short *all_div_indexes = (short*) aligned_alloc(NN, NN * sizeof(short));
+    // output arrays
+    double *all_res = (double*) aligned_alloc(n_events, n_events * sizeof(double));
+    double *all_res2 = (double*) aligned_alloc(n_events, n_events * sizeof(double));
+
+
     for( int k = 0; k < n_iter; k++ ) {
         cout << "Starting iteration " << k << endl;
         double res = 0.;
         double res2 = 0.;
         double sigma = 0.;
 
-        //double *all_randoms = new double[NN];
-        double *all_randoms = (double*) aligned_alloc(NN, NN * sizeof(double));
-        int *all_div_indexes = (int*) aligned_alloc(NN, NN * sizeof(int));
-        for (int i = 0; i < NN; i++) all_div_indexes[i] = 0;
+        // Create the random arrays directly in the GPU, copy back the array with the div indexes 
+        cl::Event wb_div, kernel_evento;
+        q.enqueueWriteBuffer(buffer_divisions, CL_TRUE, 0, sizeof(double)*n_dim*BINS_MAX, divisions, NULL, &wb_div);
+        vector<cl::Event> wbs = {wb_div};
+        cl_uint nargs = 0;
+        err = randomer.setArg(nargs++, n_events);
+        err = randomer.setArg(nargs++, n_dim);
+        err = randomer.setArg(nargs++, buffer_divisions);
+        err = randomer.setArg(nargs++, buffer_all_randoms);
+        err = randomer.setArg(nargs++, buffer_all_xwgts);
+        err = randomer.setArg(nargs++, buffer_all_div_indexes);
+        err = q.enqueueNDRangeKernel(randomer, cl::NullRange, cl::NDRange(n_events), cl::NullRange, &wbs, &kernel_evento);
+        vector<cl::Event> kers = {kernel_evento};
+        q.enqueueReadBuffer(buffer_all_div_indexes, CL_TRUE, 0, sizeof(short)*NN, all_div_indexes, &kers, NULL);
+        q.finish();
 
-        // output arrays
-        double *all_res = (double*) aligned_alloc(n_events, n_events * sizeof(double));
-        double *all_res2 = (double*) aligned_alloc(n_events, n_events * sizeof(double));
-
-        double *all_xwgts = generate_random_array(n_events, n_dim, divisions, all_randoms, all_div_indexes);
-
-        cl::Event wb_event1, wb_event2;
-        q.enqueueWriteBuffer(buffer_all_randoms, CL_FALSE, 0, sizeof(double)*NN, all_randoms, NULL, &wb_event1);
-        q.enqueueWriteBuffer(buffer_all_xwgts, CL_FALSE, 0, sizeof(double)*n_events, all_xwgts, NULL, &wb_event2);
-        vector<cl::Event> wb_events = {wb_event1, wb_event2};
-
+        // Do the kernel
         cl_uint narg = 0;
         err = kernel.setArg(narg++, buffer_all_randoms);
         err = kernel.setArg(narg++, buffer_all_xwgts);
@@ -174,7 +189,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
         // Launch the Kernel
         cl::Event kernel_event;
-        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NullRange, &wb_events, &kernel_event);
+        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NullRange, NULL, &kernel_event);
         vector<cl::Event> wait_what = {kernel_event}; // I am sure there is a less stupid way of doing this...
 
         // Copy the result from the device
@@ -205,15 +220,14 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         total_res += res*wgt_tmp;
         total_weight += wgt_tmp;
 
-        free(all_randoms);
-        free(all_div_indexes);
-        free(all_xwgts);
-        free(all_res);
-        free(all_res2);
 
         delete[] arr_res2;
     }
 
+    // Array destruction
+    free(all_div_indexes);
+    free(all_res);
+    free(all_res2);
 
     *final_result = total_res/total_weight;
     *sigma = sqrt(1.0/total_weight);

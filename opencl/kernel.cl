@@ -1,8 +1,19 @@
 #define BINS_MAX 30
 #define M_PI 3.14159265358979323846
 
+double lepage_integrand(const int n_dim, __global const double *randoms) {
+    double a = 0.1;
+    double pref = pow(1.0/a/sqrt(M_PI), n_dim);
+    double coef = 0.0;
+    for (int j = 0; j < n_dim; j++) {
+        coef += pow( (randoms[j] - 1.0/2.0)/a, 2 );
+    }
+    double lepage = pref*exp(-coef);
+    return lepage;
+}
+
 // Kernel to be run per event
-__kernel void events_kernel(__global const double *all_randoms, __global const double *all_xwgts, int n, int n_events, double xjac, __global double *all_res, __global double *all_res2) {
+__kernel void events_kernel(__global const double *all_randoms, __global const double *all_xwgts, int n_dim, int n_events, double xjac, __global double *all_res, __global double *all_res2) {
     int block_id = get_group_id(0);
     int thread_id = get_local_id(0);
     int block_size = get_local_size(0);
@@ -13,16 +24,10 @@ __kernel void events_kernel(__global const double *all_randoms, __global const d
 
     // shared lepage
     double a = 0.1;
-    double pref = pow(1.0/a/sqrt(M_PI), n);
+    double pref = pow(1.0/a/sqrt(M_PI), n_dim);
     for (int i = index; i < n_events; i += stride) {
         double wgt = all_xwgts[i]*xjac;
-
-        double coef = 0.0;
-        for (int j = 0; j < n; j++) {
-            coef += pow( (all_randoms[i*n + j] - 1.0/2.0)/a, 2 );
-        }
-        double lepage = pref*exp(-coef);
-
+        double lepage = lepage_integrand(n_dim, &all_randoms[i*n_dim]);
         double tmp = wgt*lepage;
         all_res[i] = tmp;
         all_res2[i] = pow(tmp,2);
@@ -46,7 +51,7 @@ double bad_rand(int* seed) // 1 <= *seed < m
     return (rn + 1.0)/2.0;
 }
 
-__kernel void generate_random_array_kernel(const int n_events, const int n_dim, __global const double *divisions, __global double *all_randoms, __global double *all_wgts, __global int *all_div_indexes) {
+__kernel void generate_random_array_kernel(const int n_events, const int n_dim, __global const double *divisions, __global double *all_randoms, __global double *all_wgts, __global short *all_div_indexes) {
     double reg_i = 0.0;
     double reg_f = 1.0;
 
@@ -59,7 +64,6 @@ __kernel void generate_random_array_kernel(const int n_events, const int n_dim, 
     int stride = block_size * grid_dim;
 
     int seed = index;
-
     for (int j = index; j < n_events; j+= stride) {
         double wgt = 1.0;
         for (int i = 0; i < n_dim; i++) {
@@ -74,7 +78,6 @@ __kernel void generate_random_array_kernel(const int n_events, const int n_dim, 
             double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
             double rand_x = x_ini + xdelta*aux_rand;
             wgt *= xdelta*BINS_MAX;
-            // Now we need to add an offset to the arrays
             all_randoms[j*n_dim + i] = reg_i + rand_x*(reg_f - reg_i);
             all_div_indexes[j*n_dim + i] = int_xn;
             }

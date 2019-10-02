@@ -1,7 +1,7 @@
 .PHONY: help
 
 # Running options
-EVENTS=1000000
+EVENTS=10000000
 DIMENSIONS=7
 TARGET:=sw_emu
 PROFILE:=no
@@ -48,7 +48,12 @@ help::
 # Compiler selection
 PYTHON = python3
 CXX = g++
-CXXFLAGS = -O0 -g -lOpenCL -Wall -std=c++14
+CXXFLAGS = -lOpenCL -Wall -std=c++14
+ifeq ($(DEBUG), yes)
+CXXFLAGS += -Og -g
+else
+CXXFLAGS += -O4
+endif
 XXX = $(XILINX_SDX)/bin/xcpp
 XOCC = $(XILINX_SDX)/bin/xocc
 
