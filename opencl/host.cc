@@ -123,16 +123,16 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     // Copy-IN buffer
     cl::Buffer buffer_divisions(context, CL_MEM_READ_ONLY, sizeof(double) * BINS_MAX * n_dim, NULL, &err);
     // Copy-OUT buffers
-    cl::Buffer buffer_all_div_indexes(context, CL_MEM_READ_WRITE, sizeof(short) * NN, NULL, &err);
+    cl::Buffer buffer_all_div_indexes(context, CL_MEM_WRITE_ONLY, sizeof(short) * NN, NULL, &err);
     cl::Buffer buffer_all_res(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
     cl::Buffer buffer_all_res2(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
     // in-device usage buffers (never copied in or out)
-    cl::Buffer buffer_all_randoms(context, CL_MEM_READ_WRITE, sizeof(double) * NN, NULL, &err);
-    cl::Buffer buffer_all_xwgts(context, CL_MEM_READ_WRITE, sizeof(double) * n_events, NULL, &err);
+    cl::Buffer buffer_all_randoms(context, CL_MEM_HOST_NO_ACCESS, sizeof(double) * NN, NULL, &err);
+    cl::Buffer buffer_all_xwgts(context, CL_MEM_HOST_NO_ACCESS, sizeof(double) * n_events, NULL, &err);
     // end OCL initialization
 
     srand(0);
-    double xjac = 1.0/n_events;
+    const double xjac = 1.0/n_events;
     double *divisions = (double*) aligned_alloc(n_dim*BINS_MAX, n_dim*BINS_MAX*sizeof(double));
     for( int j = 0; j < n_dim; j++ ){
         divisions[j*BINS_MAX] = 1.0;
@@ -157,14 +157,15 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
     for( int k = 0; k < n_iter; k++ ) {
         cout << "Starting iteration " << k << endl;
-        double res = 0.;
-        double res2 = 0.;
-        double sigma = 0.;
+
+        // Create the events to organize the queue (note we don't care about copy-back, those will be finished by q.finish())
+        cl::Event ev_w_div;
+        cl::Event ev_kernel_rand, ev_kernel_loop;
+        vector<cl::Event> all_events = {};
 
         // Create the random arrays directly in the GPU, copy back the array with the div indexes 
-        cl::Event wb_div, kernel_evento;
-        q.enqueueWriteBuffer(buffer_divisions, CL_TRUE, 0, sizeof(double)*n_dim*BINS_MAX, divisions, NULL, &wb_div);
-        vector<cl::Event> wbs = {wb_div};
+        q.enqueueWriteBuffer(buffer_divisions, CL_FALSE, 0, sizeof(double)*n_dim*BINS_MAX, divisions, NULL, &ev_w_div);
+        all_events.push_back(ev_w_div);
         cl_uint nargs = 0;
         err = randomer.setArg(nargs++, n_events);
         err = randomer.setArg(nargs++, n_dim);
@@ -172,12 +173,11 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         err = randomer.setArg(nargs++, buffer_all_randoms);
         err = randomer.setArg(nargs++, buffer_all_xwgts);
         err = randomer.setArg(nargs++, buffer_all_div_indexes);
-        err = q.enqueueNDRangeKernel(randomer, cl::NullRange, cl::NDRange(n_events), cl::NullRange, &wbs, &kernel_evento);
-        vector<cl::Event> kers = {kernel_evento};
-        q.enqueueReadBuffer(buffer_all_div_indexes, CL_TRUE, 0, sizeof(short)*NN, all_div_indexes, &kers, NULL);
-        q.finish();
+        err = q.enqueueNDRangeKernel(randomer, cl::NullRange, cl::NDRange(n_events), cl::NullRange, &all_events, &ev_kernel_rand);
+        all_events.push_back(ev_kernel_rand);
+        q.enqueueReadBuffer(buffer_all_div_indexes, CL_FALSE, 0, sizeof(short)*NN, all_div_indexes, &all_events, NULL);
 
-        // Do the kernel
+        // Prepare the event kernel
         cl_uint narg = 0;
         err = kernel.setArg(narg++, buffer_all_randoms);
         err = kernel.setArg(narg++, buffer_all_xwgts);
@@ -188,16 +188,18 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         err = kernel.setArg(narg++, buffer_all_res2);
 
         // Launch the Kernel
-        cl::Event kernel_event;
-        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NullRange, NULL, &kernel_event);
-        vector<cl::Event> wait_what = {kernel_event}; // I am sure there is a less stupid way of doing this...
+        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NullRange, &all_events, &ev_kernel_loop);
+        all_events.push_back(ev_kernel_loop);
 
         // Copy the result from the device
-        err = q.enqueueReadBuffer(buffer_all_res, CL_TRUE, 0, sizeof(double)*n_events, all_res, &wait_what, NULL);
-        err = q.enqueueReadBuffer(buffer_all_res2, CL_TRUE, 0, sizeof(double)*n_events, all_res2, &wait_what, NULL);
+        err = q.enqueueReadBuffer(buffer_all_res, CL_FALSE, 0, sizeof(double)*n_events, all_res, &all_events, NULL);
+        err = q.enqueueReadBuffer(buffer_all_res2, CL_FALSE, 0, sizeof(double)*n_events, all_res2, &all_events, NULL);
 
+        // Before continuing for sure everything that we copied back should be finished so just let the queue finish
         q.finish();
 
+        double res = 0.;
+        double res2 = 0.;
         for (int i = 0; i < n_events; i++)
         {
             res += all_res[i];
@@ -210,7 +212,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                 arr_res2[j*BINS_MAX + all_div_indexes[i*n_dim + j]] += all_res2[i];
 
         double err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
-        sigma = sqrt(err_tmp2);
+        double sigma = sqrt(err_tmp2);
         printf("For iteration %d, result: %1.5f +- %1.5f\n", k+1, res, sigma);
 
         for (int j = 0; j < n_dim; j ++)
