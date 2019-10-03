@@ -11,41 +11,6 @@
 using namespace std;
 
 
-
-double internal_rand(){
-    double x = (double) rand()/RAND_MAX;
-    return x;
-}
-
-double* generate_random_array(const int n_events, const int n_dim, const double *divisions, double *x, int *div_index) {
-
-    double *all_wgts = (double*) aligned_alloc(n_events, n_events * sizeof(double));;
-    for (int j = 0; j < n_events; j++)
-    {
-        double reg_i = 0.0;
-        double reg_f = 1.0;
-        double wgt = 1.0;
-        int index = j*n_dim;
-        for (int i = 0; i < n_dim; i++) {
-            double rn = internal_rand();
-            double xn = BINS_MAX*(1.0 - rn);
-            int int_xn = max(0, min( (int) xn, BINS_MAX));
-            double aux_rand = xn - int_xn;
-            double x_ini = 0.0;
-            if (int_xn > 0) {
-                x_ini = divisions[BINS_MAX*i + int_xn-1];
-            }
-            double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
-            double rand_x = x_ini + xdelta*aux_rand;
-            x[i+index] = reg_i + rand_x*(reg_f - reg_i);
-            wgt *= xdelta*BINS_MAX;
-            div_index[i+index] = int_xn;
-        }
-        all_wgts[j] = wgt;
-    }
-    return all_wgts;
-}
-
 void rebin(const double *rw, const double rc, double *subdivisions) {
     int k = -1;
     double dr = 0.0;
@@ -95,9 +60,13 @@ void refine_grid(const double *res_sq, double *subdivisions){
 }
 
 int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events, double *final_result, double *sigma) {
-    // Auxiliary variables
-    int NN = n_dim*n_events;
-    int err;
+
+    // At this point we have all necessary information to decide how many kernels to launch and how 
+    // many events should each kernel do
+    // it is stupid to send one thread per event, but it is a good idea to go beyond the maximum number of threads here
+    const int max_device_threads = 10000; // max number of parallel kernels to be launched 
+    const int events_per_kernel = (int) max(1, n_events/max_device_threads); // TODO: ensure the total number is n_events at the end
+    cout << "Threads to be sent: " << max_device_threads << ", events per kernel: " << events_per_kernel << endl;
 
     // OpenCL initialization
 
@@ -114,19 +83,19 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         program = read_program_from_file(kernel_file, context, device);
     }
 
+    // Auxiliary variables
+    int err;
+    int arr_size = max_device_threads*BINS_MAX*n_dim;
+
     // Red the kernel out of the program
     cl::Kernel kernel(program, "events_kernel", &err);
-    // Remember: block size must be able to divide n_events
-    const int target_block_size = 10;
-    const int block_size = target_block_size;
 
     // Now allocate the memory buffers on the device
     // Copy-IN buffer
     cl::Buffer buffer_divisions(context, CL_MEM_READ_ONLY, sizeof(double) * BINS_MAX * n_dim, NULL, &err);
     // Copy-OUT buffers
-    cl::Buffer buffer_all_div_indexes(context, CL_MEM_WRITE_ONLY, sizeof(short) * NN, NULL, &err);
-    cl::Buffer buffer_all_res(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
-    cl::Buffer buffer_all_res2(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
+    cl::Buffer buffer_all_res(context, CL_MEM_WRITE_ONLY, sizeof(double) * max_device_threads, NULL, &err);
+    cl::Buffer buffer_arr_res2(context, CL_MEM_WRITE_ONLY, sizeof(double) * arr_size, NULL, &err);
     // end OCL initialization
 
     srand(0);
@@ -146,10 +115,9 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     double total_weight = 0.0;
 
     // Array initialization
-    short *all_div_indexes = (short*) aligned_alloc(NN, NN * sizeof(short));
     // output arrays
-    double *all_res = (double*) aligned_alloc(n_events, n_events * sizeof(double));
-    double *all_res2 = (double*) aligned_alloc(n_events, n_events * sizeof(double));
+    double *all_res = (double*) aligned_alloc(max_device_threads, max_device_threads * sizeof(double));
+    double *arr_res2 = (double*) aligned_alloc(arr_size, arr_size * sizeof(double));
 
 
     for( int k = 0; k < n_iter; k++ ) {
@@ -168,36 +136,32 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         cl_uint narg = 0;
         err = kernel.setArg(narg++, buffer_divisions);
         err = kernel.setArg(narg++, n_dim);
-        err = kernel.setArg(narg++, n_events);
+        err = kernel.setArg(narg++, events_per_kernel);
         err = kernel.setArg(narg++, xjac);
-        err = kernel.setArg(narg++, buffer_all_div_indexes);
         err = kernel.setArg(narg++, buffer_all_res);
-        err = kernel.setArg(narg++, buffer_all_res2);
+        err = kernel.setArg(narg++, buffer_arr_res2);
 
         // Launch the Kernel
-        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NDRange(block_size), &all_events, &ev_kernel_loop);
+        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(max_device_threads), cl::NullRange, &all_events, &ev_kernel_loop);
         all_events.push_back(ev_kernel_loop);
 
         // Copy the result from the device
-        q.enqueueReadBuffer(buffer_all_div_indexes, CL_FALSE, 0, sizeof(short)*NN, all_div_indexes, &all_events, NULL);
-        err = q.enqueueReadBuffer(buffer_all_res, CL_FALSE, 0, sizeof(double)*n_events, all_res, &all_events, NULL);
-        err = q.enqueueReadBuffer(buffer_all_res2, CL_FALSE, 0, sizeof(double)*n_events, all_res2, &all_events, NULL);
+        err = q.enqueueReadBuffer(buffer_all_res, CL_FALSE, 0, sizeof(double)*max_device_threads, all_res, &all_events, NULL);
+        err = q.enqueueReadBuffer(buffer_arr_res2, CL_FALSE, 0, sizeof(double)*arr_size, arr_res2, &all_events, NULL);
 
         // Before continuing for sure everything that we copied back should be finished so just let the queue finish
         q.finish();
 
         double res = 0.;
         double res2 = 0.;
-        for (int i = 0; i < n_events; i++)
-        {
+        for (int i = 0; i < max_device_threads; i++) {
             res += all_res[i];
-            res2 += all_res2[i];
+            const int idx_t = i*BINS_MAX*n_dim;
+            for (int j = 0; j < BINS_MAX; j++) {
+                const int idx_b = idx_t + j*n_dim;
+                res2 += arr_res2[idx_b];
+            }
         }
-
-        double *arr_res2 = new double[n_dim*BINS_MAX]();
-        for( int i = 0; i < n_events; i++ )
-            for (int j = 0; j < n_dim; j++)
-                arr_res2[j*BINS_MAX + all_div_indexes[i*n_dim + j]] += all_res2[i];
 
         double err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
         double sigma = sqrt(err_tmp2);
@@ -209,15 +173,11 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         double wgt_tmp = 1.0/pow(sigma, 2);
         total_res += res*wgt_tmp;
         total_weight += wgt_tmp;
-
-
-        delete[] arr_res2;
     }
 
     // Array destruction
-    free(all_div_indexes);
     free(all_res);
-    free(all_res2);
+    free(arr_res2);
 
     *final_result = total_res/total_weight;
     *sigma = sqrt(1.0/total_weight);
@@ -245,6 +205,10 @@ int main(int argc, char **argv) {
     int n_events = atoi(argv[1]);
     int n_dim = atoi(argv[2]);
     int n_iter = 5;
+
+    if (n_dim > MAXDIM) {
+        cout << n_dim << " over the maximum number of dimensions allowed: " << MAXDIM << endl;
+    }
 
     double res, sigma;
     struct timeval start, stop;
