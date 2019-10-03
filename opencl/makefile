@@ -61,7 +61,7 @@ XOCC = $(XILINX_SDX)/bin/xocc
 TARGET_CPP = cpp-opencl
 XCLBIN = ./xclbin
 KERNEL_SRC = kernel.cl
-KERNEL_NAMES = events_kernel generate_random_array_kernel
+KERNEL_NAMES = events_kernel # generate_random_array_kernel
 KERNEL_BINS = $(addprefix $(XCLBIN)/$(TARGET)_, $(addsuffix .xo, $(KERNEL_NAMES)))
 
 # C source files
