@@ -3,3 +3,12 @@ mod/
 obj/
 *.o
 *.mod
+.Xil/
+.run
+*.xclbin
+*.xo
+*.json
+*.csv
+*.log
+cpp-opencl
+driver
