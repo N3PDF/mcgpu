@@ -161,7 +161,7 @@ $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
 # 	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk events_kernel:1 -o'$@' $(+)
 
 # Building Host
-$(EXECUTABLE): check-xrt $(HOST_SRCS) $(HOST_HDRS)
+$(EXECUTABLE): $(HOST_SRCS) $(HOST_HDRS)
 	$(XXX) $(CXXFLAGS) $(HOST_SRCS) $(HOST_HDRS) -o '$@' $(LDFLAGS)
 
 emconfig:$(EMCONFIG_DIR)/emconfig.json
@@ -171,7 +171,7 @@ $(EMCONFIG_DIR)/emconfig.json:
 check: 
 ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
 	cp -rf $(EMCONFIG_DIR)/emconfig.json .
-	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) 10000 4 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
+	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) 1000 4 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
 else
 	 ./$(EXECUTABLE) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 endif

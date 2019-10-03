@@ -1,9 +1,5 @@
-#define BINS_MAX 30
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-double lepage_integrand(const int n_dim, __global const double *randoms) {
+#include "definitions.h"
+double lepage_integrand(const int n_dim, const double *randoms) {
     const double a = 0.1;
     const double pref = pow(1.0/a/sqrt(M_PI), n_dim);
     double coef = 0.0;
@@ -25,7 +21,7 @@ double bad_rand(int* seed) // 1 <= *seed < m
     return (rn + 1.0)/2.0;
 }
 
-double generate_random_array(const int n_dim, int *seed, __global const double *divisions, __global double *randoms, __global short *div_indexes) {
+double generate_random_array(const int n_dim, int *seed, __global const double *divisions, double *randoms, __global short *div_indexes) {
     const double reg_i = 0.0;
     const double reg_f = 1.0;
     double wgt = 1.0;
@@ -63,7 +59,7 @@ __kernel void generate_random_array_kernel(const int n_events, const int n_dim, 
 }
 
 // Kernel to be run per event
-__kernel void events_kernel(__global const double *divisions, __global double *all_randoms, const int n_dim, const int n_events, const double xjac, __global short *all_div_indexes, __global double *all_res, __global double *all_res2) {
+__kernel void events_kernel(__global const double *divisions, const int n_dim, const int n_events, const double xjac, __global short *all_div_indexes, __global double *all_res, __global double *all_res2) {
     const int block_id = get_group_id(0);
     const int thread_id = get_local_id(0);
     const int block_size = get_local_size(0);
@@ -71,13 +67,15 @@ __kernel void events_kernel(__global const double *divisions, __global double *a
     const int index = block_id*block_size + thread_id;
     const int grid_dim = get_num_groups(0);
     const int stride = block_size * grid_dim;
-
+    double randoms[MAXDIM];
     int seed = index;
 
+
+    // The loop should never happen as stride == n_events?? When is n_events > stride?
     for (int i = index; i < n_events; i += stride) {
         const int idx = i*n_dim;
-        const double wgt = generate_random_array(n_dim, &seed, divisions, &all_randoms[idx], &all_div_indexes[idx]);
-        const double lepage = lepage_integrand(n_dim, &all_randoms[idx]);
+        const double wgt = generate_random_array(n_dim, &seed, divisions, &randoms, &all_div_indexes[idx]);
+        const double lepage = lepage_integrand(n_dim, &randoms);
         const double tmp = xjac*wgt*lepage;
         all_res[i] = tmp;
         all_res2[i] = pow(tmp,2);

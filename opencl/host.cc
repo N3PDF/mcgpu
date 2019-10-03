@@ -5,13 +5,12 @@
 #include <sys/time.h>
 
 #include "mccl.h"
+#include "definitions.h"
 #include <CL/cl2.hpp>
 
 using namespace std;
 
 
-#define BINS_MAX 30
-#define ALPHA 0.1
 
 double internal_rand(){
     double x = (double) rand()/RAND_MAX;
@@ -117,6 +116,9 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
     // Red the kernel out of the program
     cl::Kernel kernel(program, "events_kernel", &err);
+    // Remember: block size must be able to divide n_events
+    const int target_block_size = 10;
+    const int block_size = target_block_size;
 
     // Now allocate the memory buffers on the device
     // Copy-IN buffer
@@ -125,8 +127,6 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     cl::Buffer buffer_all_div_indexes(context, CL_MEM_WRITE_ONLY, sizeof(short) * NN, NULL, &err);
     cl::Buffer buffer_all_res(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
     cl::Buffer buffer_all_res2(context, CL_MEM_WRITE_ONLY, sizeof(double) * n_events, NULL, &err);
-    // in-device usage buffers (never copied in or out)
-    cl::Buffer buffer_all_randoms(context, CL_MEM_HOST_NO_ACCESS, sizeof(double) * NN, NULL, &err);
     // end OCL initialization
 
     srand(0);
@@ -157,7 +157,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
         // Create the events to organize the queue (note we don't care about copy-back, those will be finished by q.finish())
         cl::Event ev_w_div;
-        cl::Event ev_kernel_rand, ev_kernel_loop;
+        cl::Event ev_kernel_loop;
         vector<cl::Event> all_events = {};
 
         // Create the random arrays directly in the GPU, copy back the array with the div indexes 
@@ -167,7 +167,6 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         // Prepare the event kernel
         cl_uint narg = 0;
         err = kernel.setArg(narg++, buffer_divisions);
-        err = kernel.setArg(narg++, buffer_all_randoms);
         err = kernel.setArg(narg++, n_dim);
         err = kernel.setArg(narg++, n_events);
         err = kernel.setArg(narg++, xjac);
@@ -176,7 +175,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         err = kernel.setArg(narg++, buffer_all_res2);
 
         // Launch the Kernel
-        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NullRange, &all_events, &ev_kernel_loop);
+        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NDRange(block_size), &all_events, &ev_kernel_loop);
         all_events.push_back(ev_kernel_loop);
 
         // Copy the result from the device
