@@ -1,7 +1,7 @@
 #include "definitions.h"
 
 // Include opencl files
-#include "random.cl"
+#include "ranmar.cl"
 #include "integrand.cl"
 
 
