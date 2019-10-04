@@ -64,7 +64,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     // At this point we have all necessary information to decide how many kernels to launch and how 
     // many events should each kernel do
     // it is stupid to send one thread per event, but it is a good idea to go beyond the maximum number of threads here
-    const int max_device_threads = 10000; // max number of parallel kernels to be launched 
+    const int max_device_threads = min(10000, n_events); // max number of parallel kernels to be launched 
     const int events_per_kernel = (int) max(1, n_events/max_device_threads); // TODO: ensure the total number is n_events at the end
     cout << "Threads to be sent: " << max_device_threads << ", events per kernel: " << events_per_kernel << endl;
 
@@ -207,7 +207,8 @@ int main(int argc, char **argv) {
     int n_iter = 5;
 
     if (n_dim > MAXDIM) {
-        cout << n_dim << " over the maximum number of dimensions allowed: " << MAXDIM << endl;
+        cout << "ERROR: " << n_dim << " over the maximum number of dimensions allowed: " << MAXDIM << endl;
+        return -1;
     }
 
     double res, sigma;

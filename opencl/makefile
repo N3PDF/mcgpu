@@ -173,7 +173,7 @@ $(EMCONFIG_DIR)/emconfig.json:
 check: xilinx driver
 ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
 	cp -rf $(EMCONFIG_DIR)/emconfig.json .
-	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) 1000 4 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
+	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) 10000 4 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
 else
 	 ./$(EXECUTABLE) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 endif
