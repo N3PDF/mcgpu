@@ -146,12 +146,14 @@ build: $(BINARY_CONTAINERS)
 ########################################################## MORE XILINX SPECIFIC STUFF
 # Building kernel
 $(XCLBIN)/$(TARGET)_%.xo: $(KERNEL_SRC)
-	mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k $* -I'$(<D)' -o'$@' '$<'
+	@echo > Compiling opencl source
+	@mkdir -p $(XCLBIN)
+	@$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k $* -I'$(<D)' -o'$@' '$<'
 
 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
-	mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) -o'$@' $(+)
+	@echo > Building binary kernel for $(TARGET)
+	@mkdir -p $(XCLBIN)
+	@$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) -o'$@' $(+)
 
 # $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
 # 	mkdir -p $(XCLBIN)
@@ -168,7 +170,7 @@ emconfig:$(EMCONFIG_DIR)/emconfig.json
 $(EMCONFIG_DIR)/emconfig.json:
 	emconfigutil --platform $(DEVICE) --od $(EMCONFIG_DIR)
 
-check: 
+check: xilinx driver
 ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
 	cp -rf $(EMCONFIG_DIR)/emconfig.json .
 	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) 1000 4 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
