@@ -106,14 +106,13 @@ uint MWC64X_NextUint(mwc64x_state_t *s)
 }
 
 
-double generate_random_array(const int n_dim, int *seed, __global const double *divisions, double *randoms, int *div_indexes) {
+double generate_random_array(mwc64x_state_t* rng, const int n_dim, int *seed, __global const double *divisions, double *randoms, int *div_indexes) {
     const double reg_i = 0.0;
     const double reg_f = 1.0;
     double wgt = 1.0;
-    mwc64x_state_t rng;
-    MWC64X_SeedStreams(&rng, 0, n_dim);
+
     for (int j = 0; j < n_dim; j++) {
-        const double rn = (double) MWC64X_NextUint(&rng)/UINT_MAX;
+        const double rn = (double) MWC64X_NextUint(rng)/UINT_MAX;
         const double xn = BINS_MAX*(1.0 - rn);
         int int_xn = max(0, min( (int) xn, BINS_MAX));
         const double aux_rand = xn - int_xn;
@@ -158,11 +157,14 @@ __kernel void events_kernel(__global const double *divisions, const int n_dim, c
     int indexes[MAXDIM];
     int seed = index;
 
+    mwc64x_state_t rng;
+    MWC64X_SeedStreams(&rng, 0, index);
+
     const int idx_res2 = index*BINS_MAX*n_dim;
 
     all_res[index] = 0.0;
     for (int i = 0; i < events_per_kernel; i++) {
-        const double wgt = generate_random_array(n_dim, &seed, divisions, &randoms, &indexes);
+        const double wgt = generate_random_array(&rng, n_dim, &seed, divisions, &randoms, &indexes);
 //        printf("rn=%f\n", randoms[0]);
         const double lepage = lepage_integrand(n_dim, &randoms);
         const double tmp = xjac*wgt*lepage;
