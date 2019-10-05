@@ -1,11 +1,10 @@
 #include "definitions.h"
 
 // Include opencl files
-#include "random.cl"
+#include "random_bad.cl"
 #include "integrand.cl"
 
-
-double generate_random_array(STATE_RNG *rng, const int n_dim, int *seed, __global const double *divisions, double *randoms, int *div_indexes) {
+double generate_random_array(STATE_RNG *rng, const int n_dim, __global const double *divisions, double *randoms, int *div_indexes) {
     const double reg_i = 0.0;
     const double reg_f = 1.0;
     double wgt = 1.0;
@@ -62,7 +61,7 @@ __kernel void events_kernel(__global const double *divisions, const int n_dim, c
 
     all_res[index] = 0.0;
     for (int i = 0; i < events_per_kernel; i++) {
-        const double wgt = generate_random_array(&rng, n_dim, &seed, divisions, &randoms, &indexes);
+        const double wgt = generate_random_array(&rng, n_dim, divisions, &randoms, &indexes);
         const double lepage = integrand(n_dim, &randoms);
         const double tmp = xjac*wgt*lepage;
         all_res[index] += tmp;

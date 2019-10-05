@@ -175,9 +175,9 @@ ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
 	cp -rf $(EMCONFIG_DIR)/emconfig.json .
 	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) 10000 4 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
 else
-	 ./$(EXECUTABLE) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
+	 ./$(EXECUTABLE) $(EVENTS) $(DIMENSIONS) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin 1
 endif
-	sdx_analyze profile -i profile_summary.csv -f html
+# 	sdx_analyze profile -i profile_summary.csv -f html
 #################################################################################
 
 $(TARGET_CPP): $(HOST_SRCS)
