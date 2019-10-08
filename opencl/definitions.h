@@ -5,5 +5,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define MAXDIM 50
+#define MAXDIM 20
 #define ALPHA 0.1
+#define MAXTHREADS 10000

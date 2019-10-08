@@ -1,7 +1,7 @@
 #include "definitions.h"
 
 // Include opencl files
-#include "random_bad.cl"
+#include "random.cl"
 #include "integrand.cl"
 
 double generate_random_array(STATE_RNG *rng, const int n_dim, __global const double *divisions, double *randoms, int *div_indexes) {
@@ -26,23 +26,11 @@ double generate_random_array(STATE_RNG *rng, const int n_dim, __global const dou
     return wgt;
 }
 
-
-__kernel void generate_random_array_kernel(const int n_events, const int n_dim, __global const double *divisions, __global double *all_randoms, __global double *all_wgts, __global int *all_div_indexes) {
-    const int block_id = get_group_id(0);
-    const int thread_id = get_local_id(0);
-    const int block_size = get_local_size(0);
-
-    const int index = block_id*block_size + thread_id;
-    const int grid_dim = get_num_groups(0);
-    const int stride = block_size * grid_dim;
-
-    for (int i = index; i < n_events; i+= stride) {
-        const int idx = i*n_dim;
-    }
-}
-
 // Kernel to be run per event
-__kernel void events_kernel(__global const double *divisions, const int n_dim, const int events_per_kernel, const double xjac, __global double *all_res, __global double *all_res2) {
+__attribute__((vec_type_hint(double)))
+__attribute__((xcl_zero_global_work_offset))
+__attribute__((max_work_group_size(MAXTHREADS, 1, 1)))
+__kernel void events_kernel(__global const double *divisions, const int n_dim, const int events_per_kernel, const double xjac, __global double *all_res, __global double *arr_res2) {
     const int block_id = get_group_id(0);
     const int thread_id = get_local_id(0);
     const int block_size = get_local_size(0);
@@ -58,16 +46,26 @@ __kernel void events_kernel(__global const double *divisions, const int n_dim, c
     RGN_INITIALIZER(&rng, 0, index);
 
     const int idx_res2 = index*BINS_MAX*n_dim;
+    // tmp variables
+    double final_result = 0.0;
+    double tmp_arr_res2[BINS_MAX*MAXDIM];
 
     all_res[index] = 0.0;
+//__attribute__((opencl_unroll_hint(1)))
     for (int i = 0; i < events_per_kernel; i++) {
+//        printf("%d\n", i);
         const double wgt = generate_random_array(&rng, n_dim, divisions, &randoms, &indexes);
         const double lepage = integrand(n_dim, &randoms);
         const double tmp = xjac*wgt*lepage;
-        all_res[index] += tmp;
+        final_result += tmp;
         for (int j = 0; j < n_dim; j++) {
-            const int idx = idx_res2 + indexes[j]*n_dim + j;
-            all_res2[idx] += pow(tmp,2);
+            const int idx = indexes[j]*n_dim + j;
+            tmp_arr_res2[idx] += pow(tmp,2);
         }
+    }
+    all_res[index] = final_result;
+    // I find this unnecessary...
+    for (int i = 0; i < n_dim*BINS_MAX; i++) {
+        arr_res2[idx_res2 + i] = tmp_arr_res2[i];
     }
 }

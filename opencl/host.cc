@@ -64,7 +64,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     // At this point we have all necessary information to decide how many kernels to launch and how 
     // many events should each kernel do
     // it is stupid to send one thread per event, but it is a good idea to go beyond the maximum number of threads here
-    const int max_device_threads = min(10000, n_events); // max number of parallel kernels to be launched 
+    const int max_device_threads = min(MAXTHREADS, n_events); // max number of parallel kernels to be launched 
     const int events_per_kernel = (int) max(1, n_events/max_device_threads); // TODO: ensure the total number is n_events at the end
     cout << "Threads to be sent: " << max_device_threads << ", events per kernel: " << events_per_kernel << endl;
 
@@ -90,13 +90,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     // Red the kernel out of the program
     cl::Kernel kernel(program, "events_kernel", &err);
 
-    // Now allocate the memory buffers on the device
-    // Copy-IN buffer
-    cl::Buffer buffer_divisions(context, CL_MEM_READ_ONLY, sizeof(double) * BINS_MAX * n_dim, NULL, &err);
-    // Copy-OUT buffers
-    cl::Buffer buffer_all_res(context, CL_MEM_WRITE_ONLY, sizeof(double) * max_device_threads, NULL, &err);
-    cl::Buffer buffer_arr_res2(context, CL_MEM_WRITE_ONLY, sizeof(double) * arr_size, NULL, &err);
-    // end OCL initialization
+
 
     srand(0);
     const double xjac = 1.0/n_events;
@@ -119,17 +113,26 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     double *all_res = (double*) aligned_alloc(max_device_threads, max_device_threads * sizeof(double));
     double *arr_res2 = (double*) aligned_alloc(arr_size, arr_size * sizeof(double));
 
+    // Now allocate the memory buffers on the device
+    // Copy-IN buffer
+    // Copy-OUT buffers
+    cl::Buffer buffer_all_res(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double) * max_device_threads, all_res , &err);
+    cl::Buffer buffer_arr_res2(context, CL_MEM_USE_HOST_PTR |  CL_MEM_WRITE_ONLY, sizeof(double) * arr_size, arr_res2 , &err);
+    // end OCL initialization
+
 
     for( int k = 0; k < n_iter; k++ ) {
         cout << "Starting iteration " << k << endl;
 
         // Create the events to organize the queue (note we don't care about copy-back, those will be finished by q.finish())
-        cl::Event ev_w_div;
+        cl::Event ev_w_div, ev_w_mig;
         cl::Event ev_kernel_loop;
         vector<cl::Event> all_events = {};
 
         // Create the random arrays directly in the GPU, copy back the array with the div indexes 
-        q.enqueueWriteBuffer(buffer_divisions, CL_FALSE, 0, sizeof(double)*n_dim*BINS_MAX, divisions, NULL, &ev_w_div);
+        //q.enqueueWriteBuffer(buffer_divisions, CL_FALSE, 0, sizeof(double)*n_dim*BINS_MAX, divisions, NULL, &ev_w_div);
+        cl::Buffer buffer_divisions(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double) * BINS_MAX * n_dim, divisions, &err);
+        q.enqueueMigrateMemObjects({buffer_divisions}, 0, NULL, &ev_w_div);
         all_events.push_back(ev_w_div);
 
         // Prepare the event kernel
@@ -146,8 +149,9 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         all_events.push_back(ev_kernel_loop);
 
         // Copy the result from the device
-        err = q.enqueueReadBuffer(buffer_all_res, CL_FALSE, 0, sizeof(double)*max_device_threads, all_res, &all_events, NULL);
-        err = q.enqueueReadBuffer(buffer_arr_res2, CL_FALSE, 0, sizeof(double)*arr_size, arr_res2, &all_events, NULL);
+//        err = q.enqueueReadBuffer(buffer_all_res, CL_FALSE, 0, sizeof(double)*max_device_threads, all_res, &all_events, NULL);
+//        err = q.enqueueReadBuffer(buffer_arr_res2, CL_FALSE, 0, sizeof(double)*arr_size, arr_res2, &all_events, NULL);
+        err = q.enqueueMigrateMemObjects({buffer_all_res, buffer_arr_res2}, CL_MIGRATE_MEM_OBJECT_HOST, &all_events);
 
         // Before continuing for sure everything that we copied back should be finished so just let the queue finish
         q.finish();
