@@ -50,7 +50,9 @@ __kernel void events_kernel(__global const double *divisions, const int n_dim, c
     double final_result = 0.0;
     double tmp_arr_res2[BINS_MAX*MAXDIM];
 
-    all_res[index] = 0.0;
+    for (int i = 0; i < n_dim*BINS_MAX; i++) {
+        tmp_arr_res2[i] = 0.0;
+    }
 //__attribute__((opencl_unroll_hint(1)))
     for (int i = 0; i < events_per_kernel; i++) {
 //        printf("%d\n", i);
