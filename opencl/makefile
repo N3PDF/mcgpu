@@ -93,7 +93,7 @@ CXXFLAGS += -fmessage-length=0
 LDFLAGS += -lrt -lstdc++
 
 # Kernel compiler global settings
-CLFLAGS += -t $(TARGET) --platform $(DEVICE) --save-temps
+CLFLAGS += -t $(TARGET) --platform $(DEVICE) --save-temps -O3 -j 18 -D FPGABUILD
 
 EXECUTABLE = driver
 CMD_ARGS = $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin

@@ -4,7 +4,7 @@
 #include "random.cl"
 #include "integrand.cl"
 
-double generate_random_array(STATE_RNG *rng, const int n_dim, __global const double *divisions, double *randoms, int *div_indexes) {
+double generate_random_array(STATE_RNG *rng, const int n_dim, const double *divisions, double *randoms, int *div_indexes) {
     const double reg_i = 0.0;
     const double reg_f = 1.0;
     double wgt = 1.0;
@@ -30,7 +30,16 @@ double generate_random_array(STATE_RNG *rng, const int n_dim, __global const dou
 __attribute__((vec_type_hint(double)))
 __attribute__((xcl_zero_global_work_offset))
 __attribute__((max_work_group_size(MAXTHREADS, 1, 1)))
-__kernel void events_kernel(__global const double *divisions, const int n_dim, const int events_per_kernel, const double xjac, __global double *all_res, __global double *arr_res2) {
+__kernel void events_kernel(__global const double *divisions_external, const int n_dim, const int events_per_kernel, const double xjac, __global double *all_res, __global double *arr_res2) {
+    // Step 1: burst read memory from divisions into local memory
+    double divisions[MAXDIM*BINS_MAX];
+#ifdef FPGABUILD
+    __attribute__((xcl_pipeline_loop(1)))
+#endif
+    readDivisions: for (int i = 0; i < n_dim*BINS_MAX; i++) {
+        divisions[i] = divisions_external[i];
+    }
+
     const int block_id = get_group_id(0);
     const int thread_id = get_local_id(0);
     const int block_size = get_local_size(0);
@@ -53,9 +62,7 @@ __kernel void events_kernel(__global const double *divisions, const int n_dim, c
     for (int i = 0; i < n_dim*BINS_MAX; i++) {
         tmp_arr_res2[i] = 0.0;
     }
-//__attribute__((opencl_unroll_hint(1)))
     for (int i = 0; i < events_per_kernel; i++) {
-//        printf("%d\n", i);
         const double wgt = generate_random_array(&rng, n_dim, divisions, &randoms, &indexes);
         const double lepage = integrand(n_dim, &randoms);
         const double tmp = xjac*wgt*lepage;
@@ -65,9 +72,13 @@ __kernel void events_kernel(__global const double *divisions, const int n_dim, c
             tmp_arr_res2[idx] += pow(tmp,2);
         }
     }
+
+    // Write out
     all_res[index] = final_result;
-    // I find this unnecessary...
-    for (int i = 0; i < n_dim*BINS_MAX; i++) {
+#ifdef FPGABUILD
+    __attribute__((xcl_pipeline_loop(1)))
+#endif
+    writeArr: for (int i = 0; i < n_dim*BINS_MAX; i++) {
         arr_res2[idx_res2 + i] = tmp_arr_res2[i];
     }
 }

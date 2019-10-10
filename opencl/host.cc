@@ -9,12 +9,13 @@
 #include <CL/cl2.hpp>
 
 using namespace std;
+template <typename T>
+using aligned_vector = vector<T, aligned_allocator<T>>;
 
-
-void rebin(const double *rw, const double rc, double *subdivisions) {
+void rebin(const vector<double> rw, const double rc, double *subdivisions) {
     int k = -1;
     double dr = 0.0;
-    double aux[BINS_MAX];
+    vector<double> aux(BINS_MAX);
     for (int i = 0; i < BINS_MAX-1; i++){
         double old_xi = 0.0;
         while (rc > dr) {
@@ -36,7 +37,7 @@ void rebin(const double *rw, const double rc, double *subdivisions) {
 }
 
 void refine_grid(const double *res_sq, double *subdivisions){
-    double aux[BINS_MAX];
+    vector<double> aux(BINS_MAX);
     double tmp = (res_sq[0] + res_sq[1])/2.0;
     double aux_sum = tmp;
     aux[0] = tmp;
@@ -48,7 +49,7 @@ void refine_grid(const double *res_sq, double *subdivisions){
     tmp = (res_sq[BINS_MAX-2] + res_sq[BINS_MAX-1])/2.0;
     aux_sum += tmp;
     aux[BINS_MAX-1] = tmp;
-    double rw[BINS_MAX];
+    vector<double> rw(BINS_MAX);
     double rc = 0.0;
     for (int i = 0; i < BINS_MAX-1; i ++) {
         tmp = pow( (1.0 - aux[i]/aux_sum)/(log(aux_sum) - log(aux[i])), ALPHA );
@@ -68,10 +69,38 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     const int events_per_kernel = (int) max(1, n_events/max_device_threads); // TODO: ensure the total number is n_events at the end
     cout << "Threads to be sent: " << max_device_threads << ", events per kernel: " << events_per_kernel << endl;
 
+    // Set the sizes of all the arrays of this run
+    // Auxiliary variables
+    const int div_size = n_dim*BINS_MAX;
+    const int arr_size = max_device_threads*BINS_MAX*n_dim;
+    const int all_res_size = max_device_threads;
+
+    // Declare HOST arrays
+    aligned_vector<double> divisions(div_size);
+    aligned_vector<double> all_res(all_res_size);
+    aligned_vector<double> arr_res2(arr_size);
+
+    // Initialize integration
+    srand(0);
+    const double xjac = 1.0/n_events;
+    for(int j = 0; j < n_dim; j++ ){
+        divisions[j*BINS_MAX] = 1.0;
+    }
+    // fake initialization at the beginning
+    vector<double> rw_tmp(BINS_MAX, 1.0);
+    for( int j = 0; j < n_dim; j++ ){
+        rebin(rw_tmp, 1.0/BINS_MAX, &divisions[j*BINS_MAX]);
+    }
+    double total_res = 0.0;
+    double total_weight = 0.0;
+
+
+
     // OpenCL initialization
+    int err;
 
     // Read the device 
-    auto device = get_default_device(device_idx); // platform 0 == GPU
+    const auto device = get_default_device(device_idx); // platform 0 == GPU
 
     // Create context, queue and program
     cl::Context context( {device} );
@@ -82,78 +111,43 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     } else {
         program = read_program_from_file(kernel_file, context, device);
     }
-
-    // Auxiliary variables
-    int err;
-    int arr_size = max_device_threads*BINS_MAX*n_dim;
-
     // Red the kernel out of the program
     cl::Kernel kernel(program, "events_kernel", &err);
 
 
-
-    srand(0);
-    const double xjac = 1.0/n_events;
-    double *divisions = (double*) aligned_alloc(n_dim*BINS_MAX, n_dim*BINS_MAX*sizeof(double));
-    for( int j = 0; j < n_dim; j++ ){
-        divisions[j*BINS_MAX] = 1.0;
-    }
-    // fake initialization at the beginning
-    double rw_tmp[BINS_MAX];
-    std::fill_n(rw_tmp, BINS_MAX, 1.0);
-    for( int j = 0; j < n_dim; j++ ){
-        rebin(rw_tmp, 1.0/BINS_MAX, &divisions[j*BINS_MAX]);
-    }
-
-    double total_res = 0.0;
-    double total_weight = 0.0;
-
-    // Array initialization
-    // output arrays
-    double *all_res = (double*) aligned_alloc(max_device_threads, max_device_threads * sizeof(double));
-    double *arr_res2 = (double*) aligned_alloc(arr_size, arr_size * sizeof(double));
-
     // Now allocate the memory buffers on the device
     // Copy-IN buffer
+    cl::Buffer buffer_divisions(context, CL_MEM_COPY_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double) * div_size, divisions.data(), &err);
     // Copy-OUT buffers
-    cl::Buffer buffer_all_res(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double) * max_device_threads, all_res , &err);
-    cl::Buffer buffer_arr_res2(context, CL_MEM_USE_HOST_PTR |  CL_MEM_WRITE_ONLY, sizeof(double) * arr_size, arr_res2 , &err);
+    cl::Buffer buffer_arr_res2(context, CL_MEM_USE_HOST_PTR |  CL_MEM_WRITE_ONLY, sizeof(double) * arr_size, arr_res2.data(), &err);
+    cl::Buffer buffer_all_res(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double)*all_res_size, all_res.data(), &err);
     // end OCL initialization
+    if (err) {
+        cout << "Some error while allocating buffers in the device" << endl;
+        return -1;
+    }
 
+    // Prepare the event kernel
+    cl_uint narg = 0;
+    err = kernel.setArg(narg++, buffer_divisions);
+    err = kernel.setArg(narg++, n_dim);
+    err = kernel.setArg(narg++, events_per_kernel);
+    err = kernel.setArg(narg++, xjac);
+    err = kernel.setArg(narg++, buffer_all_res);
+    err = kernel.setArg(narg++, buffer_arr_res2);
+    if (err) {
+        cout << "Some error while setting the kernel arguments" << endl;
+        return -1;
+    }
 
     for( int k = 0; k < n_iter; k++ ) {
         cout << "Starting iteration " << k << endl;
 
-        // Create the events to organize the queue (note we don't care about copy-back, those will be finished by q.finish())
-        cl::Event ev_w_div, ev_w_mig;
-        cl::Event ev_kernel_loop;
-        vector<cl::Event> all_events = {};
-
-        // Create the random arrays directly in the GPU, copy back the array with the div indexes 
-        //q.enqueueWriteBuffer(buffer_divisions, CL_FALSE, 0, sizeof(double)*n_dim*BINS_MAX, divisions, NULL, &ev_w_div);
-        cl::Buffer buffer_divisions(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double) * BINS_MAX * n_dim, divisions, &err);
-        q.enqueueMigrateMemObjects({buffer_divisions}, 0, NULL, &ev_w_div);
-        all_events.push_back(ev_w_div);
-
-        // Prepare the event kernel
-        cl_uint narg = 0;
-        err = kernel.setArg(narg++, buffer_divisions);
-        err = kernel.setArg(narg++, n_dim);
-        err = kernel.setArg(narg++, events_per_kernel);
-        err = kernel.setArg(narg++, xjac);
-        err = kernel.setArg(narg++, buffer_all_res);
-        err = kernel.setArg(narg++, buffer_arr_res2);
-
-        // Launch the Kernel
-        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(max_device_threads), cl::NullRange, &all_events, &ev_kernel_loop);
-        all_events.push_back(ev_kernel_loop);
-
+        vector<cl::Event> all_events(1);
+        // Launch the kernel
+        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(max_device_threads), cl::NullRange, NULL, &all_events[0]);
         // Copy the result from the device
-//        err = q.enqueueReadBuffer(buffer_all_res, CL_FALSE, 0, sizeof(double)*max_device_threads, all_res, &all_events, NULL);
-//        err = q.enqueueReadBuffer(buffer_arr_res2, CL_FALSE, 0, sizeof(double)*arr_size, arr_res2, &all_events, NULL);
-        err = q.enqueueMigrateMemObjects({buffer_all_res, buffer_arr_res2}, CL_MIGRATE_MEM_OBJECT_HOST, &all_events);
-
-        // Before continuing for sure everything that we copied back should be finished so just let the queue finish
+        err = q.enqueueMigrateMemObjects({buffer_all_res, buffer_arr_res2}, CL_MIGRATE_MEM_OBJECT_HOST, &all_events); 
         q.finish();
 
         double res = 0.;
@@ -167,26 +161,26 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
             }
         }
 
-        double err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
-        double sigma = sqrt(err_tmp2);
-        printf("For iteration %d, result: %1.5f +- %1.5f\n", k+1, res, sigma);
+        const double err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
+        const double sigma_tmp = sqrt(err_tmp2);
+        printf("For iteration %d, result: %1.5f +- %1.5f\n", k+1, res, sigma_tmp);
+
+        const double wgt_tmp = 1.0/pow(sigma_tmp, 2);
+        total_res += res*wgt_tmp;
+        total_weight += wgt_tmp;
 
         for (int j = 0; j < n_dim; j ++)
             refine_grid(&arr_res2[j*BINS_MAX], &divisions[j*BINS_MAX]);
 
-        double wgt_tmp = 1.0/pow(sigma, 2);
-        total_res += res*wgt_tmp;
-        total_weight += wgt_tmp;
+        if ( k != n_iter ) {
+            // If we are still doing the integration, rewrite the divisions buffer
+            // OPENCL will ensure this is a blocking call so no need to worry about saving events or whatever
+            q.enqueueWriteBuffer(buffer_divisions, CL_TRUE, 0, sizeof(double)*div_size, divisions.data());
+        }
     }
-
-    // Array destruction
-    free(all_res);
-    free(arr_res2);
 
     *final_result = total_res/total_weight;
     *sigma = sqrt(1.0/total_weight);
-
-    delete[] divisions;
 
     return 0;
 }
