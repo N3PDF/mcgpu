@@ -23,25 +23,33 @@ void vector_add_xilinx_repo(global const DOUBLE* a,
                        const int n_elements) {
     DOUBLE arrayA[BUFFER_SIZE];
     DOUBLE arrayB[BUFFER_SIZE];
-    
+
+#ifdef FPGABUILD
     __attribute__((xcl_loop_tripcount(c_len, c_len)))
+#endif
     for (int i = 0 ; i < n_elements ; i += BUFFER_SIZE) {
         int size = BUFFER_SIZE;
         
         if (i + size > n_elements) size = n_elements - i;
 
+#ifdef FPGABUILD
         __attribute__((xcl_loop_tripcount(c_size, c_size)))
         __attribute__((xcl_pipeline_loop(1)))
+#endif
         readA: for (int j = 0 ; j < size ; j++) {
                 arrayA[j] = a[i+j]; }
 
+#ifdef FPGABUILD
         __attribute__((xcl_loop_tripcount(c_size, c_size)))
         __attribute__((xcl_pipeline_loop(1)))
+#endif
         readB: for (int j = 0 ; j < size ; j++) {
                 arrayB[j] = b[i+j]; }
 
+#ifdef FPGABUILD
         __attribute__((xcl_loop_tripcount(c_size, c_size)))
         __attribute__((xcl_pipeline_loop(1)))
+#endif
         vadd_writeC: for (int j = 0 ; j < size ; j++) {
                 c[i+j] = arrayA[j] + arrayB[j]; }
     }

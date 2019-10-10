@@ -45,7 +45,7 @@ help::
 # Compiler selection
 PYTHON = python3
 CXX = g++
-CXXFLAGS = -lOpenCL -Wall -std=c++14
+CXXFLAGS = -lOpenCL -Wall -std=c++14 -lomp -fopenmp
 ifeq ($(DEBUG), yes)
 CXXFLAGS += -Og -g
 else
@@ -169,7 +169,7 @@ run-cpu: $(TARGET_CPP)
 	./$(TARGET_CPP) $(KERNEL) $(KERNEL_SRC) $(EVENTS) 2
 
 run-gpu: $(TARGET_CPP)
-	./$(TARGET_CPP) $(KERNEL) $(KERNEL_SRC) $(EVENTS) 2
+	./$(TARGET_CPP) $(KERNEL) $(KERNEL_SRC) $(EVENTS) 0
 
 # Cleaning stuff
 RMDIR=rm -rf

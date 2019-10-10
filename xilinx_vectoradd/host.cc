@@ -12,11 +12,26 @@ using namespace std;
 template <typename T>
 using aligned_vector = vector<T, aligned_allocator<T>>;
 
+DOUBLE drand() {
+    const int N = 1000; // random enough
+    unsigned int lo,hi;
+    __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+    unsigned long int rdtsc = ((unsigned long int)hi << 32) | lo;
+    return (DOUBLE) (rdtsc % N)/N;
+}
+
 int run_kernel(const string kernel_name, const string kernel_file, const int n_events, const int device_idx) {
     // Declare HOST arrays
-    aligned_vector<DOUBLE> A(n_events, 1.0);
-    aligned_vector<DOUBLE> B(n_events, 1.0);
+    aligned_vector<DOUBLE> A(n_events);
+    aligned_vector<DOUBLE> B(n_events);
     aligned_vector<DOUBLE> C(n_events);
+
+    // Use random numbers for sums
+    #pragma omp parallel for
+    for (int i = 0; i < n_events; i ++) {
+        A[i] = drand();
+        B[i] = drand();
+    }
 
     // OpenCL initialization
     struct timeval start, stop;
