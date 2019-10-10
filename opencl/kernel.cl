@@ -27,10 +27,11 @@ double generate_random_array(STATE_RNG *rng, const int n_dim, const double *divi
 }
 
 // Kernel to be run per event
+__kernel
 __attribute__((vec_type_hint(double)))
 __attribute__((xcl_zero_global_work_offset))
 __attribute__((max_work_group_size(MAXTHREADS, 1, 1)))
-__kernel void events_kernel(__global const double *divisions_external, const int n_dim, const int events_per_kernel, const double xjac, __global double *all_res, __global double *arr_res2) {
+void events_kernel(__global const double *divisions_external, const int n_dim, const int events_per_kernel, const double xjac, __global double *all_res, __global double *arr_res2) {
     // Step 1: burst read memory from divisions into local memory
     double divisions[MAXDIM*BINS_MAX];
 #ifdef FPGABUILD
@@ -40,28 +41,36 @@ __kernel void events_kernel(__global const double *divisions_external, const int
         divisions[i] = divisions_external[i];
     }
 
+    // Step 2: Allocate local arrays to store intermediate results
+    double randoms[MAXDIM];
+    int indexes[MAXDIM];
+    double tmp_arr_res2[BINS_MAX*MAXDIM];
+    double final_result = 0.0;
+#ifdef FPGABUILD
+    __attribute__((xcl_pipeline_loop(1)))
+#endif
+    for (int i = 0; i < MAXDIM*BINS_MAX; i++) {
+        if (i == n_dim*BINS_MAX) break;
+        tmp_arr_res2[i] = 0.0;
+    }
+
+    // Step 3: Set up the indicies for this thread...
+    // note that they NEVER do this in the opencl repository
+    // TODO: investigate
     const int block_id = get_group_id(0);
     const int thread_id = get_local_id(0);
     const int block_size = get_local_size(0);
-
     const int index = block_id*block_size + thread_id;
-    const int grid_dim = get_num_groups(0);
-    const int stride = block_size * grid_dim;
-    double randoms[MAXDIM];
-    int indexes[MAXDIM];
-    int seed = index;
+    const int idx_res2 = index*BINS_MAX*n_dim;
 
+    // Step 4: Set up the random number generator
     STATE_RNG rng;
     RGN_INITIALIZER(&rng, 0, index);
 
-    const int idx_res2 = index*BINS_MAX*n_dim;
-    // tmp variables
-    double final_result = 0.0;
-    double tmp_arr_res2[BINS_MAX*MAXDIM];
-
-    for (int i = 0; i < n_dim*BINS_MAX; i++) {
-        tmp_arr_res2[i] = 0.0;
-    }
+    // Event kernel, everything here is local to the FPGA
+#ifdef FPGABUILD
+    __attribute__((opencl_unroll_hint))
+#endif
     for (int i = 0; i < events_per_kernel; i++) {
         const double wgt = generate_random_array(&rng, n_dim, divisions, &randoms, &indexes);
         const double lepage = integrand(n_dim, &randoms);
@@ -78,7 +87,8 @@ __kernel void events_kernel(__global const double *divisions_external, const int
 #ifdef FPGABUILD
     __attribute__((xcl_pipeline_loop(1)))
 #endif
-    writeArr: for (int i = 0; i < n_dim*BINS_MAX; i++) {
+    writeArr: for (int i = 0; i < MAXDIM*BINS_MAX; i++) {
+        if (i == n_dim*BINS_MAX) break;
         arr_res2[idx_res2 + i] = tmp_arr_res2[i];
     }
 }
