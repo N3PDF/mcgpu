@@ -3,6 +3,7 @@
 #include <iostream>
 #include <math.h>
 #include <sys/time.h>
+#include <fstream>
 
 #include "mccl.h"
 #include "definitions.h"
@@ -140,6 +141,14 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
     gettimeofday(&stop, 0);
     const double result = (stop.tv_sec - start.tv_sec) + (stop.tv_usec - start.tv_usec)*1e-6;
     printf("Finished running OCL kernel, took: %1.7f seconds\n", result);
+    ofstream f;
+    if (device_idx == 0) {
+        f.open("gpu.time", ios_base::app);
+    } else if (device_idx == 1) {
+        f.open("fpga.time", ios_base::app);
+    }
+    f << n_events << " " << result << endl;
+    f.close();
 
     cout << "Result checker: ";
     #pragma omp parallel for
