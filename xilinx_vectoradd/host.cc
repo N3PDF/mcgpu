@@ -58,12 +58,13 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
         return -1;
     }
 
-#ifdef FPGABUILD
+#ifdef USEHBM
 // FPGA only implementation, much more complicated!
     // Now allocate the intermediate arrays that will declare the HBM references
     cl_mem_ext_ptr_t Aptr;
     cl_mem_ext_ptr_t Bptr;
     cl_mem_ext_ptr_t Cptr;
+
     // Point to the data
     Aptr.obj = A.data();
     Bptr.obj = B.data();

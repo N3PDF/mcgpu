@@ -7,6 +7,7 @@ PROFILE:=no
 DEBUG:=no
 DEVICE:=xilinx_u280_xdma_201910_1
 KERNEL:=vector_add_simple
+USERAM:=no
 
 ECHO:= @echo
 help::
@@ -38,6 +39,7 @@ help::
 	$(ECHO) "    EVENTS how many events to run (default $(EVENTS))"
 	$(ECHO) "    PROFILE enable profiling (default $(PROFILE))"
 	$(ECHO) "    DEBUG enable debug summary report (default $(DEBUG))"
+	$(ECHO) "    USERAM enable using RAM instead of HBM $(USERAM)"
 	$(ECHO) ""
 	$(ECHO) ""
 	$(ECHO) ""
@@ -45,7 +47,7 @@ help::
 # Compiler selection
 PYTHON = python3
 CXX = g++
-CXXFLAGS = -lOpenCL -Wall -std=c++14 -lomp -fopenmp
+CXXFLAGS = -lOpenCL -Wall -std=c++14 -fopenmp
 ifeq ($(DEBUG), yes)
 CXXFLAGS += -Og -g
 else
@@ -101,7 +103,13 @@ BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 
 # Set the HBM banks
 CLFLAGS += --max_memory_ports $(KERNEL)
-LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:HBM[0] --sp $(KERNEL)_1.m_axi_gmem1:HBM[1] --sp $(KERNEL)_1.m_axi_gmem2:HBM[2]
+ifeq ($(USERAM), yes)
+	LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:DDR[0] --sp $(KERNEL)_1.m_axi_gmem1:DDR[0] --sp $(KERNEL)_1.m_axi_gmem2:DDR[0]
+else
+	LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:HBM[0] --sp $(KERNEL)_1.m_axi_gmem1:HBM[1] --sp $(KERNEL)_1.m_axi_gmem2:HBM[2]
+	CLFLAGS += -D USEHBM
+endif
+
 
 ##########################
 
@@ -161,8 +169,10 @@ endif
 run: xilinx driver
 ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
 	cp -rf $(EMCONFIG_DIR)/emconfig.json .
-endif
 	XCL_EMULATION_MODE=$(EMULATION_MODE) ./$(EXECUTABLE) $(KERNEL) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin $(EVENTS) 1
+else
+	./$(EXECUTABLE) $(KERNEL) $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin $(EVENTS) 1
+endif
 # 	sdx_analyze profile -i profile_summary.csv -f html
 #################################################################################
 
