@@ -11,8 +11,8 @@ void vector_add_simple(__global const DOUBLE *a, __global const DOUBLE *b, __glo
 
 // Copied from Xilinx repo: getting_started/hello_world/helloworld_ocl/src/vector_addition.clm  
 // modified just to take the arguments in the correct order and to take DOUBLE data
-#define BUFFER_SIZE 256
-#define DATA_SIZE 1024
+#define BUFFER_SIZE 1024
+#define DATA_SIZE 4096
 //TRIPCOUNT indentifier
 __constant uint c_len = DATA_SIZE/BUFFER_SIZE;
 __constant uint c_size = BUFFER_SIZE;

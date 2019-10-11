@@ -6,7 +6,7 @@ TARGET:=sw_emu
 PROFILE:=no
 DEBUG:=no
 DEVICE:=xilinx_u280_xdma_201910_1
-KERNEL:=vector_add_simple # generate_random_array_kernel
+KERNEL:=vector_add_simple
 
 ECHO:= @echo
 help::
@@ -99,6 +99,10 @@ EMCONFIG_DIR = $(XCLBIN)/$(DSA)
 BINARY_CONTAINERS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 
+# Set the HBM banks
+CLFLAGS += --max_memory_ports $(KERNEL)
+LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:HBM[0] --sp $(KERNEL)_1.m_axi_gmem1:HBM[1] --sp $(KERNEL)_1.m_axi_gmem2:HBM[2]
+
 ##########################
 
 #Generates profile summary report
@@ -122,14 +126,16 @@ build: $(BINARY_CONTAINERS)
 ########################################################## MORE XILINX SPECIFIC STUFF
 # Building kernel
 $(XCLBIN)/$(TARGET)_%.xo: $(KERNEL_SRC)
-	@echo > Compiling opencl source
+	@echo ""
+	@echo "> > > Compiling opencl source"
 	@mkdir -p $(XCLBIN)
-	@$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k $* -I'$(<D)' -o'$@' '$<'
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k $* -I'$(<D)' -o'$@' '$<'
 
 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
-	@echo > Building binary kernel for $(TARGET)
+	@echo ""
+	@echo "> > > Building binary kernel for $(TARGET)"
 	@mkdir -p $(XCLBIN)
-	@$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) -o'$@' $(+)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL):1 -o'$@' $(+)
 
 # $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
 # 	mkdir -p $(XCLBIN)

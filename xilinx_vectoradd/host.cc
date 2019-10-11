@@ -7,6 +7,7 @@
 #include "mccl.h"
 #include "definitions.h"
 #include <CL/cl2.hpp>
+#include <CL/cl_ext_xilinx.h> // Necessary to use the pointers to HBM memory
 
 using namespace std;
 template <typename T>
@@ -57,13 +58,37 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
         return -1;
     }
 
+#ifdef FPGABUILD
+// FPGA only implementation, much more complicated!
+    // Now allocate the intermediate arrays that will declare the HBM references
+    cl_mem_ext_ptr_t Aptr;
+    cl_mem_ext_ptr_t Bptr;
+    cl_mem_ext_ptr_t Cptr;
+    // Point to the data
+    Aptr.obj = A.data();
+    Bptr.obj = B.data();
+    Cptr.obj = C.data();
+    // Assign this to 0 as per the Xilinx manual????
+    Aptr.param = 0;
+    Bptr.param = 0;
+    Cptr.param = 0;
+    // Flag specify the memory bank (honestly, this interface is retarded)
+    // I've defined the banks in mccl.h
+    Aptr.flags = bank[0];
+    Bptr.flags = bank[1];
+    Cptr.flags = bank[2];
 
-    // Now allocate the memory buffers on the device (not using CL_MEM_COPY_HOST_PTR in order to follow xilinx stupid implementation)
+    // Now allocate the memory buffers on the device by pointing them to the HBM pointers
+    cl::Buffer buffer_A(context, CL_MEM_READ_ONLY | CL_MEM_EXT_PTR_XILINX | CL_MEM_USE_HOST_PTR, sizeof(DOUBLE)*n_events, &Aptr, &err);
+    cl::Buffer buffer_B(context, CL_MEM_READ_ONLY | CL_MEM_EXT_PTR_XILINX | CL_MEM_USE_HOST_PTR, sizeof(DOUBLE)*n_events, &Bptr, &err);
+    cl::Buffer buffer_C(context, CL_MEM_WRITE_ONLY | CL_MEM_EXT_PTR_XILINX | CL_MEM_USE_HOST_PTR, sizeof(DOUBLE)*n_events, &Cptr, &err);
+#else
     // Copy-IN buffers
     cl::Buffer buffer_A(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * n_events, A.data(), &err);
     cl::Buffer buffer_B(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * n_events, B.data(), &err);
     // Copy-OUT buffers
     cl::Buffer buffer_C(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(DOUBLE) * n_events, C.data(), &err);
+#endif
     // end OCL initialization
     if (err) {
         cout << "Some error while allocating buffers in the device" << endl;
@@ -73,10 +98,11 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
     // Prepare the event kernel
     cl_uint narg = 0;
     err = kernel.setArg(narg++, buffer_A);
+    if (err) cout << "Kernel argument " << narg << " failed" << endl;
     err = kernel.setArg(narg++, buffer_B);
     err = kernel.setArg(narg++, buffer_C);
     if (err) {
-        cout << "Some error while setting the kernel arguments" << err << endl;
+        cout << "Some error while setting the kernel arguments, error code: " << err << endl;
         return -1;
     }
 
@@ -115,12 +141,12 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
     printf("Finished running OCL kernel, took: %1.7f seconds\n", result);
 
     cout << "Result checker: ";
+    #pragma omp parallel for
     for(int i = 0; i < n_events; i++) {
         DOUBLE host_result = A[i] + B[i];
         if (host_result != C[i]) {
             cout << "Wrong result for member " << i << " Host: " << host_result << " Device: " << C[i] << endl;
             err = 1;
-            return - 1;
         }
     }
     cout << "passed!" << endl;
