@@ -59,7 +59,7 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
         return -1;
     }
 
-#ifdef USEHBM
+#ifdef USEHBMNOT
 // FPGA only implementation, much more complicated!
     // Now allocate the intermediate arrays that will declare the HBM references
     cl_mem_ext_ptr_t Aptr;
