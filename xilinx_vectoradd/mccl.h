@@ -23,7 +23,7 @@ cl::Program read_program_from_bin(const std::string &file_name, cl::Context ctx,
 
 // This allocator is copied verbatim from Xilinx's repository
 //////// --- BEGIN COPY
-// When creating a buffer with user pointer (CL_MEM_USE_HOST_PTR), under the hood                                                                                   
+// When creating a buffer with user pointer (CL_MEM_USE_HOST_PTR1er the hood                                                                                   
 // User ptr is used if and only if it is properly aligned (page aligned). When not                                                                                  
 // aligned, runtime has no choice but to create its own host side buffer that backs                                                                                 
 // user ptr. This in turn implies that all operations that move data to and from                                                                                    

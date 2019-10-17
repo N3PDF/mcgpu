@@ -9,6 +9,7 @@ DEVICE:=xilinx_u280_xdma_201910_1
 KERNEL:=vector_add_xilinx_repo
 #vector_add_simple
 USERAM:=yes
+CUNITS:=2
 
 ECHO:= @echo
 help::
@@ -41,6 +42,7 @@ help::
 	$(ECHO) "    PROFILE enable profiling (default $(PROFILE))"
 	$(ECHO) "    DEBUG enable debug summary report (default $(DEBUG))"
 	$(ECHO) "    USERAM enable using RAM instead of HBM $(USERAM)"
+	$(ECHO) "    CUNITS number of computings units, default: $(CUNITS)"
 	$(ECHO) ""
 	$(ECHO) ""
 	$(ECHO) ""
@@ -48,7 +50,7 @@ help::
 # Compiler selection
 PYTHON = python3
 CXX = g++
-CXXFLAGS = -lOpenCL -Wall -std=c++14 -fopenmp
+CXXFLAGS = -lOpenCL -Wall -std=c++14 -fopenmp -DCUNITS=$(CUNITS)
 ifeq ($(DEBUG), yes)
 CXXFLAGS += -Og -g
 else
@@ -106,6 +108,7 @@ BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 CLFLAGS += --max_memory_ports $(KERNEL)
 ifeq ($(USERAM), yes)
 	LDCLFLAGS+=--sp $(KERNEL)_1.a:DDR[0] --sp $(KERNEL)_1.b:DDR[0] --sp $(KERNEL)_1.c:DDR[0]
+	LDCLFLAGS+=--sp $(KERNEL)_2.a:DDR[1] --sp $(KERNEL)_2.b:DDR[1] --sp $(KERNEL)_2.c:DDR[1]
 else
 	LDCLFLAGS+=--sp $(KERNEL)_1.a:HBM[0] --sp $(KERNEL)_1.b:HBM[1] --sp $(KERNEL)_1.c:HBM[2]
 endif
@@ -143,7 +146,7 @@ $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
 	@echo ""
 	@echo "> > > Building binary kernel for $(TARGET)"
 	@mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL):1 -o'$@' $(+)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL):$(CUNITS) -o'$@' $(+)
 
 # $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
 # 	mkdir -p $(XCLBIN)

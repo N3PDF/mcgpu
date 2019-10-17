@@ -9,6 +9,11 @@
 #include "definitions.h"
 #include <CL/cl2.hpp>
 #include <CL/cl_ext_xilinx.h> // Necessary to use the pointers to HBM memory
+#ifdef CUNITS
+const int threads = CUNITS;
+#else
+const int threads = 1;
+#endif
 
 using namespace std;
 template <typename T>
@@ -23,17 +28,19 @@ DOUBLE drand() {
 }
 
 int run_kernel(const string kernel_name, const string kernel_file, const int n_events, const int device_idx) {
-    // Declare HOST arrays
+    // Declare input HOST arrays
     aligned_vector<DOUBLE> A(n_events);
     aligned_vector<DOUBLE> B(n_events);
-    aligned_vector<DOUBLE> C(n_events);
-
     // Use random numbers for sums
     #pragma omp parallel for
     for (int i = 0; i < n_events; i ++) {
         A[i] = drand();
         B[i] = drand();
     }
+    const int chunk_size = (int) n_events / threads;
+
+    // Declare many output HOST arrays
+    vector<aligned_vector<DOUBLE>> out_C(threads, aligned_vector<DOUBLE>(chunk_size));
 
     // OpenCL initialization
     struct timeval start, stop;
@@ -43,78 +50,102 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
     const auto device = get_default_device(device_idx); // platform 0 == GPU
     // Create context, queue and program
     cl::Context context( {device} );
-    cl::CommandQueue q(context, device);
+    cl::CommandQueue q(context, device,  CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);
     cl::Program program;
     if (device_idx == 1) {
         program = read_program_from_bin(kernel_file, context, device);
     } else {
         program = read_program_from_file(kernel_file, context, device);
     }
-    // Red the kernel out of the program
-    cl::Kernel kernel(program, kernel_name.c_str(), &err);
-    if (err) {
-        cout << "Error reading kernel" << endl;
-        cout << " > Kernel name: " << kernel_name << endl;
-        cout << " > Kernel file: " << kernel_file << endl;
-        return -1;
+
+    // Read the kernels out of the program
+    vector<cl::Kernel> all_kernels;
+
+    // Buffer 
+    vector<cl::Buffer> bin_A, bin_B, bout_C;
+
+    // Kernel events
+    vector<vector<cl::Event>> kevents(threads, vector<cl::Event>(1));
+
+    for (int i = 0; i < threads; i++) {
+        cout << endl;
+        cout << " # Starting preparation for thread: " << i + 1 << endl;
+
+        cl::Kernel kernel(program, kernel_name.c_str(), &err);
+        if (err) {
+            cout << "Error reading kernel" << endl;
+            cout << " > Kernel name: " << kernel_name << endl;
+            cout << " > Kernel file: " << kernel_file << endl;
+            return -1;
+        }
+        all_kernels.push_back(kernel);
+
+        // Copy-IN buffers
+        cl::Buffer buffer_A(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * chunk_size, A.data() + i*chunk_size, &err);
+        cl::Buffer buffer_B(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * chunk_size, B.data() + i*chunk_size, &err);
+        // Copy-OUT buffers
+        cl::Buffer buffer_C(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(DOUBLE) * chunk_size, out_C[i].data(), &err);
+        // end OCL initialization
+        if (err) {
+            cout << "Some error while allocating buffers in the device" << endl;
+            return -1;
+        }
+        bin_A.push_back(buffer_A);
+        bin_B.push_back(buffer_B);
+        bout_C.push_back(buffer_C);
+
+        // Prepare the event kernel
+        cl_uint narg = 0;
+        err = all_kernels[i].setArg(narg++, bin_A[i]);
+        err = all_kernels[i].setArg(narg++, bin_B[i]);
+        err = all_kernels[i].setArg(narg++, bout_C[i]);
+        if (err) {
+            cout << "Some error while setting the kernel arguments, error code: " << err << endl;
+            return -1;
+        } else {
+            cout << " > > Arguments created for thread: " << i+1 << endl;
+        }
+        // Enqueue the copy of the input vectors
+        err = q.enqueueMigrateMemObjects({bin_A[i], bin_B[i]}, 0);
+        if (err) { 
+            cout << "Some error while copying memory to device" << endl;
+            return -1;
+        } else {
+            cout << "Memory migrated" << endl;
+        }
+        if (kernel_name == "vector_add_simple") {
+            err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(chunk_size), cl::NullRange, NULL, NULL);
+        } else if (kernel_name == "vector_add_xilinx_repo") {
+            err = all_kernels[i].setArg(narg++, chunk_size);
+            if (err) {
+                cout << "Some error while setting the kernel arguments, error code: " << err << endl;
+                return -1;
+            }
+            err = q.enqueueTask(all_kernels[i], NULL, &kevents[i][0]);
+        }
+        if (err) { 
+            cout << "Some error while running the kernel" << endl;
+            return -1;
+        }
     }
 
-    // Copy-IN buffers
-    cl::Buffer buffer_A(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * n_events, A.data(), &err);
-    cl::Buffer buffer_B(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * n_events, B.data(), &err);
-    // Copy-OUT buffers
-    cl::Buffer buffer_C(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(DOUBLE) * n_events, C.data(), &err);
-
-    // end OCL initialization
-    if (err) {
-        cout << "Some error while allocating buffers in the device" << endl;
-        return -1;
+    // Now to first approximation simply wait until all the information has been retrieved
+    for (int i = 0; i < threads; i++) {
+        // note that this is the wrong way of doing this but it illustrates
+        // how can we have a stream-like thing doing the accumulation in CPU while the
+        // FPGA computes
+        kevents[i][0].wait();
+        err = q.enqueueMigrateMemObjects({bout_C[i]}, CL_MIGRATE_MEM_OBJECT_HOST);
+        if (err) { 
+            cout << "Some error while copying memory from device" << endl;
+            return -1;
+        }
     }
 
-    // Prepare the event kernel
-    cl_uint narg = 0;
-    err = kernel.setArg(narg++, buffer_A);
-    if (err) cout << "Kernel argument " << narg << " failed" << endl;
-    err = kernel.setArg(narg++, buffer_B);
-    err = kernel.setArg(narg++, buffer_C);
-    if (err) {
-        cout << "Some error while setting the kernel arguments, error code: " << err << endl;
-        return -1;
-    }
-
-    // Enqueue the copy of the input vectors
-    err = q.enqueueMigrateMemObjects({buffer_A, buffer_B}, 0);
-    if (err) { 
-        cout << "Some error while copying memory to device" << endl;
-        return -1;
-    }
-
-    /* Here start the kernel dependent lines
-     * up to here everything should be shared by all kernels since 
-     * this is just a copy of two arrays (A and B) into a vector C
-     */
-
-    if (kernel_name == "vector_add_simple") {
-        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(n_events), cl::NullRange, NULL, NULL);
-    } else if (kernel_name == "vector_add_xilinx_repo") {
-        err = kernel.setArg(narg++, n_events);
-        err = q.enqueueTask(kernel);
-    }
-    if (err) { 
-        cout << "Some error while running the kernel" << endl;
-        return -1;
-    }
-
-    /////// END
-    err = q.enqueueMigrateMemObjects({buffer_C}, CL_MIGRATE_MEM_OBJECT_HOST);
-    if (err) { 
-        cout << "Some error while copying memory from device" << endl;
-        return -1;
-    }
     q.finish();
     gettimeofday(&stop, 0);
     const double result = (stop.tv_sec - start.tv_sec) + (stop.tv_usec - start.tv_usec)*1e-6;
-    printf("Finished running OCL kernel, took: %1.7f seconds\n", result);
+    printf("Finished running OCL kernel %s, took: %1.7f seconds\n",kernel_name.c_str(),  result);
     ofstream f;
     if (device_idx == 0) {
         f.open("gpu.time", ios_base::app);
@@ -125,15 +156,21 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
     f.close();
 
     cout << "Result checker: ";
-    #pragma omp parallel for
-    for(int i = 0; i < n_events; i++) {
-        DOUBLE host_result = A[i] + B[i];
-        if (host_result != C[i]) {
-            cout << "Wrong result for member " << i << " Host: " << host_result << " Device: " << C[i] << endl;
-            err = 1;
+    //#pragma omp parallel for
+    for(int j = 0; j < threads; j++) {
+        for(int i = 0; i < chunk_size; i++) {
+            const int idx = j*chunk_size + i;
+            DOUBLE host_result = A[idx] + B[idx];
+            if (host_result != out_C[j][i]) {
+                cout << "Wrong result for member " << idx << " Host: " << host_result << " Device: " << out_C[j][i] << endl;
+                err = 1;
+                return err;
+            }
         }
     }
-    cout << "passed!" << endl;
+    if (!err) {
+        cout << "passed!" << endl;
+    }
     return err;
 }
 
