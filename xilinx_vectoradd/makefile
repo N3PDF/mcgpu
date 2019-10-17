@@ -8,7 +8,7 @@ DEBUG:=no
 DEVICE:=xilinx_u280_xdma_201910_1
 KERNEL:=vector_add_xilinx_repo
 #vector_add_simple
-USERAM:=no
+USERAM:=yes
 
 ECHO:= @echo
 help::
@@ -105,9 +105,9 @@ BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 # Select the memory ports
 CLFLAGS += --max_memory_ports $(KERNEL)
 ifeq ($(USERAM), yes)
-	LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:DDR[0] --sp $(KERNEL)_1.m_axi_gmem1:DDR[0] --sp $(KERNEL)_1.m_axi_gmem2:DDR[0]
+	LDCLFLAGS+=--sp $(KERNEL)_1.a:DDR[0] --sp $(KERNEL)_1.b:DDR[0] --sp $(KERNEL)_1.c:DDR[0]
 else
-	LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:HBM[0] --sp $(KERNEL)_1.m_axi_gmem1:HBM[1] --sp $(KERNEL)_1.m_axi_gmem2:HBM[2]
+	LDCLFLAGS+=--sp $(KERNEL)_1.a:HBM[0] --sp $(KERNEL)_1.b:HBM[1] --sp $(KERNEL)_1.c:HBM[2]
 endif
 
 
