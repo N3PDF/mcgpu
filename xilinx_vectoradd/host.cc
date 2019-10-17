@@ -59,38 +59,12 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
         return -1;
     }
 
-#ifdef USEHBMNOT
-// FPGA only implementation, much more complicated!
-    // Now allocate the intermediate arrays that will declare the HBM references
-    cl_mem_ext_ptr_t Aptr;
-    cl_mem_ext_ptr_t Bptr;
-    cl_mem_ext_ptr_t Cptr;
-
-    // Point to the data
-    Aptr.obj = A.data();
-    Bptr.obj = B.data();
-    Cptr.obj = C.data();
-    // Assign this to 0 as per the Xilinx manual????
-    Aptr.param = 0;
-    Bptr.param = 0;
-    Cptr.param = 0;
-    // Flag specify the memory bank (honestly, this interface is retarded)
-    // I've defined the banks in mccl.h
-    Aptr.flags = bank[0];
-    Bptr.flags = bank[1];
-    Cptr.flags = bank[2];
-
-    // Now allocate the memory buffers on the device by pointing them to the HBM pointers
-    cl::Buffer buffer_A(context, CL_MEM_READ_ONLY | CL_MEM_EXT_PTR_XILINX | CL_MEM_USE_HOST_PTR, sizeof(DOUBLE)*n_events, &Aptr, &err);
-    cl::Buffer buffer_B(context, CL_MEM_READ_ONLY | CL_MEM_EXT_PTR_XILINX | CL_MEM_USE_HOST_PTR, sizeof(DOUBLE)*n_events, &Bptr, &err);
-    cl::Buffer buffer_C(context, CL_MEM_WRITE_ONLY | CL_MEM_EXT_PTR_XILINX | CL_MEM_USE_HOST_PTR, sizeof(DOUBLE)*n_events, &Cptr, &err);
-#else
     // Copy-IN buffers
     cl::Buffer buffer_A(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * n_events, A.data(), &err);
     cl::Buffer buffer_B(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * n_events, B.data(), &err);
     // Copy-OUT buffers
     cl::Buffer buffer_C(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(DOUBLE) * n_events, C.data(), &err);
-#endif
+
     // end OCL initialization
     if (err) {
         cout << "Some error while allocating buffers in the device" << endl;

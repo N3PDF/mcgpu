@@ -6,7 +6,8 @@ TARGET:=sw_emu
 PROFILE:=no
 DEBUG:=no
 DEVICE:=xilinx_u280_xdma_201910_1
-KERNEL:=vector_add_simple
+KERNEL:=vector_add_xilinx_repo
+#vector_add_simple
 USERAM:=no
 
 ECHO:= @echo
@@ -101,13 +102,12 @@ EMCONFIG_DIR = $(XCLBIN)/$(DSA)
 BINARY_CONTAINERS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 
-# Set the HBM banks
+# Select the memory ports
 CLFLAGS += --max_memory_ports $(KERNEL)
 ifeq ($(USERAM), yes)
 	LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:DDR[0] --sp $(KERNEL)_1.m_axi_gmem1:DDR[0] --sp $(KERNEL)_1.m_axi_gmem2:DDR[0]
 else
 	LDCLFLAGS+=--sp $(KERNEL)_1.m_axi_gmem0:HBM[0] --sp $(KERNEL)_1.m_axi_gmem1:HBM[1] --sp $(KERNEL)_1.m_axi_gmem2:HBM[2]
-	CLFLAGS += -D USEHBM
 endif
 
 
