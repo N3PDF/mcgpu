@@ -29,15 +29,17 @@ DOUBLE drand() {
 
 int run_kernel(const string kernel_name, const string kernel_file, const int n_events, const int device_idx) {
     // Declare input HOST arrays
-    aligned_vector<DOUBLE> A(n_events);
-    aligned_vector<DOUBLE> B(n_events);
+    const int chunk_size = (int) n_events / threads;
+    vector<aligned_vector<DOUBLE>> in_A(threads, aligned_vector<DOUBLE>(chunk_size));
+    vector<aligned_vector<DOUBLE>> in_B(threads, aligned_vector<DOUBLE>(chunk_size));
     // Use random numbers for sums
     #pragma omp parallel for
-    for (int i = 0; i < n_events; i ++) {
-        A[i] = drand();
-        B[i] = drand();
+    for (int i = 0; i < threads; i++) {
+        for (int j = 0; j < chunk_size; j++) {
+            in_A[i][j] = drand();
+            in_B[i][j] = drand();
+        }
     }
-    const int chunk_size = (int) n_events / threads;
 
     // Declare many output HOST arrays
     vector<aligned_vector<DOUBLE>> out_C(threads, aligned_vector<DOUBLE>(chunk_size));
@@ -71,7 +73,9 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
         cout << endl;
         cout << " # Starting preparation for thread: " << i + 1 << endl;
 
-        cl::Kernel kernel(program, kernel_name.c_str(), &err);
+        string cuname = kernel_name + ":{" + kernel_name + "_" + to_string(i+1) + "}";
+
+        cl::Kernel kernel(program, cuname.c_str(), &err);
         if (err) {
             cout << "Error reading kernel" << endl;
             cout << " > Kernel name: " << kernel_name << endl;
@@ -81,8 +85,8 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
         all_kernels.push_back(kernel);
 
         // Copy-IN buffers
-        cl::Buffer buffer_A(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * chunk_size, A.data() + i*chunk_size, &err);
-        cl::Buffer buffer_B(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * chunk_size, B.data() + i*chunk_size, &err);
+        cl::Buffer buffer_A(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * chunk_size, in_A[i].data(), &err);
+        cl::Buffer buffer_B(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, sizeof(DOUBLE) * chunk_size, in_B[i].data(), &err);
         // Copy-OUT buffers
         cl::Buffer buffer_C(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(DOUBLE) * chunk_size, out_C[i].data(), &err);
         // end OCL initialization
@@ -130,6 +134,7 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
     }
 
     // Now to first approximation simply wait until all the information has been retrieved
+    #pragma omp parallel for
     for (int i = 0; i < threads; i++) {
         // note that this is the wrong way of doing this but it illustrates
         // how can we have a stream-like thing doing the accumulation in CPU while the
@@ -138,7 +143,6 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
         err = q.enqueueMigrateMemObjects({bout_C[i]}, CL_MIGRATE_MEM_OBJECT_HOST);
         if (err) { 
             cout << "Some error while copying memory from device" << endl;
-            return -1;
         }
     }
 
@@ -156,15 +160,13 @@ int run_kernel(const string kernel_name, const string kernel_file, const int n_e
     f.close();
 
     cout << "Result checker: ";
-    //#pragma omp parallel for
+    #pragma omp parallel for
     for(int j = 0; j < threads; j++) {
         for(int i = 0; i < chunk_size; i++) {
-            const int idx = j*chunk_size + i;
-            DOUBLE host_result = A[idx] + B[idx];
+            DOUBLE host_result = in_A[j][i] + in_B[j][i];
             if (host_result != out_C[j][i]) {
-                cout << "Wrong result for member " << idx << " Host: " << host_result << " Device: " << out_C[j][i] << endl;
+                cout << "Wrong result for member " << j << " Host: " << host_result << " Device: " << out_C[j][i] << endl;
                 err = 1;
-                return err;
             }
         }
     }
