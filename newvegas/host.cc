@@ -60,14 +60,7 @@ void refine_grid(const double *res_sq, double *subdivisions){
     rebin(rw, rc, subdivisions);
 }
 
-int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events, double *final_result, double *sigma) {
-
-    // At this point we have all necessary information to decide how many kernels to launch and how 
-    // many events should each kernel do
-    // it is stupid to send one thread per event, but it is a good idea to go beyond the maximum number of threads here
-    const int max_device_threads = min(MAXTHREADS, n_events); // max number of parallel kernels to be launched 
-    const int events_per_kernel = (int) max(1, n_events/max_device_threads); // TODO: ensure the total number is n_events at the end
-    cout << "Threads to be sent: " << max_device_threads << ", events per kernel: " << events_per_kernel << endl;
+int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events, double *vegas_result, double *sigma) {
 
     // Set the sizes of all the arrays of this run
     // Auxiliary variables
@@ -112,12 +105,19 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     string kernel_name = "events_kernel";
 
     // declare complicated host arrays
-    vector<aligned_vector<double>> results(
-            n_concurrent, aligned_vector<double>(BUFFER_SIZE)
-            );
-    vector<aligned_vector<short>> indexes(
-            n_concurrent, aligned_vector<short>(BUFFER_SIZE*n_dim)
-            );
+//    vector<aligned_vector<double>> results(
+//            n_concurrent, aligned_vector<double>(BUFFER_SIZE)
+//            );
+//    vector<aligned_vector<int>> indexes(
+//            n_concurrent, aligned_vector<int>(BUFFER_SIZE*n_dim)
+//            );
+
+    vector<aligned_vector<double>> results(n_concurrent);
+    vector<aligned_vector<int>> indexes(n_concurrent);
+    for (int i = 0; i < n_concurrent; i++){
+        results[i] = aligned_vector<double>(BUFFER_SIZE, 0.0);
+        indexes[i] = aligned_vector<int>(BUFFER_SIZE*MAXDIM, 0);
+    }
 
     // Now let us start by declaring everything that will be reused
     vector<cl::Kernel> all_kernels(n_concurrent);
@@ -126,7 +126,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     vector<cl::Buffer> b_all_res(n_concurrent), b_div_indexes(n_concurrent);
 
     for (int i = 0; i < n_concurrent; i++) {
-        string cuname = kernel_name + ":{" + kernel_name + "_" + to_string(i+1) + "}";
+        string cuname = kernel_name ;//+ ":{" + kernel_name + "_" + to_string(i+1) + "}";
         all_kernels[i] = cl::Kernel(program, cuname.c_str(), &err);
         if(err) { 
             cout << " > ERROR reading kernel " << cuname << endl;
@@ -134,7 +134,12 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         }
         b_divisions[i] = cl::Buffer(context, CL_MEM_COPY_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double) * div_size, divisions.data(), &err);
         b_all_res[i] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double)*BUFFER_SIZE, results[i].data(), &err);
-        b_div_indexes[i] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(short)*BUFFER_SIZE*n_dim, indexes[i].data(), &err);
+        b_div_indexes[i] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(int)*BUFFER_SIZE*MAXDIM, indexes[i].data(), &err);
+        if(err) {
+            cout << "Error preparing the buffers" << endl;
+            return -1;
+        }
+
 
         // Now set the arguments for the kernel
         cl_uint narg = 0;
@@ -144,12 +149,16 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         err = all_kernels[i].setArg(narg++, 0);
         err = all_kernels[i].setArg(narg++, b_all_res[i]);
         err = all_kernels[i].setArg(narg++, b_div_indexes[i]);
+        if(err) {
+            cout << "Error setting kernel arguments" << endl;
+            return -1;
+        }
     }
 
     const int index_argument = 3; //we need to keep changing argument 3
 
     // Now let's look how many times we need to send computations of BUFFER_SIZE
-    const int n_times = max(n_events / BUFFER_SIZE, 1);
+    const int n_times = max(n_events / BUFFER_SIZE / n_concurrent , 1);
     for(int k = 0; k < n_iter; k++) {
         cout << "Starting iteration " << k << endl;
         // Each of the concurrent one is sent in a differnt CPU thread
@@ -158,25 +167,46 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         double res2 = 0.0;
         vector<vector<double>> arr_res2(n_dim, vector<double>(BINS_MAX, 0.0));
         for (int i = 0; i < n_concurrent; i++) {
-            for (int t = 0; t < n_times; t += n_concurrent) {
+            for (int t = 0; t < n_times; t++) {
                 cl::Event kevent;
+                cl::Event wevent;
 
                 // Send concurrent kernels
-                all_kernels[i].setArg(index_argument, t);
+                const int rand_seed = k*n_concurrent*n_times + i*n_times + t;
+                all_kernels[i].setArg(index_argument, rand_seed);
+                if(err) {
+                    cout << "Error setting index argument" << endl;
+                    return -1;
+                }
 
                 // Enqueue writting the divisions 
-                err = q.enqueueMigrateMemObjects({b_divisions[i]}, 0);
+                // err = q.enqueueMigrateMemObjects({b_divisions[i]}, 0);
+                // for some unknown reason, the divisions need to be copied manualyl
+                err = q.enqueueWriteBuffer(b_divisions[i], CL_TRUE, 0, sizeof(double)*div_size, divisions.data());
+                if (err) { 
+                    cout << "Error while copying divisions" << endl;
+                    return -1;
+                }
 
                 // Now enqueue the kernels
                 err = q.enqueueTask(all_kernels[i], NULL, &kevent);
+                if (err) { 
+                    cout << "Error while enqueuing kernel" << endl;
+                    return -1;
+                }
 
                 // Now wait for this event to finish before asking for the data
                 kevent.wait();
-                err = q.enqueueMigrateMemObjects({b_all_res[i], b_div_indexes[i]}, CL_MIGRATE_MEM_OBJECT_HOST);
+                err = q.enqueueMigrateMemObjects({b_all_res[i], b_div_indexes[i]}, CL_MIGRATE_MEM_OBJECT_HOST, NULL, &wevent);
+                if (err) { 
+                    cout << "Error while recovering data" << endl;
+                    return -1;
+                }
+                wevent.wait();
 
                 // Now we have the data, let us do something with it
                 // in a critical way to first approximtion
-                for (int b = 0; b< BUFFER_SIZE; b++) {
+                for (int b = 0; b < BUFFER_SIZE; b++) {
                     const double tmp = results[i][b];
                     const double tmp2 = tmp*tmp;
                     res += tmp;
@@ -189,6 +219,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                 }
             }
         } 
+        q.finish();
         // At this point we have collected all the results we need to recompute the grid so let's go
         const double err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
         const double sigma_tmp = sqrt(err_tmp2);
@@ -200,10 +231,10 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
         for (int j = 0; j < n_dim; j ++)
             refine_grid(arr_res2[j].data(), &divisions[j*BINS_MAX]);
-    }
 
-    *final_result = total_res/total_weight;
-    *sigma = sqrt(1.0/total_weight);
+        *vegas_result = total_res/total_weight;
+        *sigma = sqrt(1.0/total_weight);
+    }
 
     return 0;
 }

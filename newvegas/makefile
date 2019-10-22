@@ -11,9 +11,6 @@ DEVICE:=xilinx_u280_xdma_201910_1
 ECHO:= @echo
 help::
 	$(ECHO) "Makefile Usage:"
-	$(ECHO) "  make run-gpu"
-	$(ECHO) "      compiles and run the CPP program in GPU"
-	$(ECHO) ""
 	$(ECHO) "  make run-cpu"
 	$(ECHO) "      compiles and run the CPP program in CPU"
 	$(ECHO) ""
@@ -183,9 +180,6 @@ $(TARGET_CPP): $(HOST_SRCS)
 
 run-cpu: $(TARGET_CPP)
 	./$(TARGET_CPP) $(EVENTS) $(DIMENSIONS) $(KERNEL_SRC) 2
-
-run-gpu: $(TARGET_CPP)
-	./$(TARGET_CPP) $(EVENTS) $(DIMENSIONS) $(KERNEL_SRC) 0
 
 # Cleaning stuff
 RMDIR=rm -rf
