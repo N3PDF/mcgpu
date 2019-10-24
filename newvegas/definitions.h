@@ -7,5 +7,4 @@
 
 #define MAXDIM 20
 #define ALPHA 0.1
-
-#define BUFFER_SIZE 32
+#define MAXTHREADS 10000

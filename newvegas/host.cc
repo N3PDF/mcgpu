@@ -60,14 +60,25 @@ void refine_grid(const double *res_sq, double *subdivisions){
     rebin(rw, rc, subdivisions);
 }
 
-int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events, double *vegas_result, double *sigma) {
+int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events, double *final_result, double *sigma) {
+
+    // At this point we have all necessary information to decide how many kernels to launch and how 
+    // many events should each kernel do
+    // it is stupid to send one thread per event, but it is a good idea to go beyond the maximum number of threads here
+    const int max_device_threads = min(MAXTHREADS, n_events); // max number of parallel kernels to be launched 
+    const int events_per_kernel = (int) max(1, n_events/max_device_threads); // TODO: ensure the total number is n_events at the end
+    cout << "Threads to be sent: " << max_device_threads << ", events per kernel: " << events_per_kernel << endl;
 
     // Set the sizes of all the arrays of this run
     // Auxiliary variables
     const int div_size = n_dim*BINS_MAX;
+    const int arr_size = max_device_threads*BINS_MAX*n_dim;
+    const int all_res_size = max_device_threads;
 
     // Declare HOST arrays
     aligned_vector<double> divisions(div_size);
+    aligned_vector<double> all_res(all_res_size);
+    aligned_vector<double> arr_res2(arr_size);
 
     // Initialize integration
     srand(0);
@@ -82,6 +93,8 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     }
     double total_res = 0.0;
     double total_weight = 0.0;
+
+
 
     // OpenCL initialization
     int err;
@@ -98,129 +111,56 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     } else {
         program = read_program_from_file(kernel_file, context, device);
     }
+    // Red the kernel out of the program
+    cl::Kernel kernel(program, "events_kernel", &err);
 
-    // First decide how many concurrent calculations we want
-    const int n_concurrent = 1;
 
-    string kernel_name = "events_kernel";
-
-    // declare complicated host arrays
-//    vector<aligned_vector<double>> results(
-//            n_concurrent, aligned_vector<double>(BUFFER_SIZE)
-//            );
-//    vector<aligned_vector<int>> indexes(
-//            n_concurrent, aligned_vector<int>(BUFFER_SIZE*n_dim)
-//            );
-
-    vector<aligned_vector<double>> results(n_concurrent);
-    vector<aligned_vector<int>> indexes(n_concurrent);
-    for (int i = 0; i < n_concurrent; i++){
-        results[i] = aligned_vector<double>(BUFFER_SIZE, 0.0);
-        indexes[i] = aligned_vector<int>(BUFFER_SIZE*MAXDIM, 0);
+    // Now allocate the memory buffers on the device
+    // Copy-IN buffer
+    cl::Buffer buffer_divisions(context, CL_MEM_COPY_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double) * div_size, divisions.data(), &err);
+    // Copy-OUT buffers
+    cl::Buffer buffer_arr_res2(context, CL_MEM_USE_HOST_PTR |  CL_MEM_WRITE_ONLY, sizeof(double) * arr_size, arr_res2.data(), &err);
+    cl::Buffer buffer_all_res(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double)*all_res_size, all_res.data(), &err);
+    // end OCL initialization
+    if (err) {
+        cout << "Some error while allocating buffers in the device" << endl;
+        return -1;
     }
 
-    // Now let us start by declaring everything that will be reused
-    vector<cl::Kernel> all_kernels(n_concurrent);
-
-    vector<cl::Buffer> b_divisions(n_concurrent);
-    vector<cl::Buffer> b_all_res(n_concurrent), b_div_indexes(n_concurrent);
-
-    for (int i = 0; i < n_concurrent; i++) {
-        string cuname = kernel_name ;//+ ":{" + kernel_name + "_" + to_string(i+1) + "}";
-        all_kernels[i] = cl::Kernel(program, cuname.c_str(), &err);
-        if(err) { 
-            cout << " > ERROR reading kernel " << cuname << endl;
-            return -1;
-        }
-        b_divisions[i] = cl::Buffer(context, CL_MEM_COPY_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double) * div_size, divisions.data(), &err);
-        b_all_res[i] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double)*BUFFER_SIZE, results[i].data(), &err);
-        b_div_indexes[i] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(int)*BUFFER_SIZE*MAXDIM, indexes[i].data(), &err);
-        if(err) {
-            cout << "Error preparing the buffers" << endl;
-            return -1;
-        }
-
-
-        // Now set the arguments for the kernel
-        cl_uint narg = 0;
-        err = all_kernels[i].setArg(narg++, b_divisions[i]);
-        err = all_kernels[i].setArg(narg++, n_dim);
-        err = all_kernels[i].setArg(narg++, xjac);
-        err = all_kernels[i].setArg(narg++, 0);
-        err = all_kernels[i].setArg(narg++, b_all_res[i]);
-        err = all_kernels[i].setArg(narg++, b_div_indexes[i]);
-        if(err) {
-            cout << "Error setting kernel arguments" << endl;
-            return -1;
-        }
+    // Prepare the event kernel
+    cl_uint narg = 0;
+    err = kernel.setArg(narg++, buffer_divisions);
+    err = kernel.setArg(narg++, n_dim);
+    err = kernel.setArg(narg++, events_per_kernel);
+    err = kernel.setArg(narg++, xjac);
+    err = kernel.setArg(narg++, buffer_all_res);
+    err = kernel.setArg(narg++, buffer_arr_res2);
+    if (err) {
+        cout << "Some error while setting the kernel arguments" << endl;
+        return -1;
     }
 
-    const int index_argument = 3; //we need to keep changing argument 3
-
-    // Now let's look how many times we need to send computations of BUFFER_SIZE
-    const int n_times = max(n_events / BUFFER_SIZE / n_concurrent , 1);
-    for(int k = 0; k < n_iter; k++) {
+    for( int k = 0; k < n_iter; k++ ) {
         cout << "Starting iteration " << k << endl;
-        // Each of the concurrent one is sent in a differnt CPU thread
-        // in parallel 
-        double res = 0.0;
-        double res2 = 0.0;
-        vector<vector<double>> arr_res2(n_dim, vector<double>(BINS_MAX, 0.0));
-        for (int i = 0; i < n_concurrent; i++) {
-            for (int t = 0; t < n_times; t++) {
-                cl::Event kevent;
-                cl::Event wevent;
 
-                // Send concurrent kernels
-                const int rand_seed = k*n_concurrent*n_times + i*n_times + t;
-                all_kernels[i].setArg(index_argument, rand_seed);
-                if(err) {
-                    cout << "Error setting index argument" << endl;
-                    return -1;
-                }
-
-                // Enqueue writting the divisions 
-                // err = q.enqueueMigrateMemObjects({b_divisions[i]}, 0);
-                // for some unknown reason, the divisions need to be copied manualyl
-                err = q.enqueueWriteBuffer(b_divisions[i], CL_TRUE, 0, sizeof(double)*div_size, divisions.data());
-                if (err) { 
-                    cout << "Error while copying divisions" << endl;
-                    return -1;
-                }
-
-                // Now enqueue the kernels
-                err = q.enqueueTask(all_kernels[i], NULL, &kevent);
-                if (err) { 
-                    cout << "Error while enqueuing kernel" << endl;
-                    return -1;
-                }
-
-                // Now wait for this event to finish before asking for the data
-                kevent.wait();
-                err = q.enqueueMigrateMemObjects({b_all_res[i], b_div_indexes[i]}, CL_MIGRATE_MEM_OBJECT_HOST, NULL, &wevent);
-                if (err) { 
-                    cout << "Error while recovering data" << endl;
-                    return -1;
-                }
-                wevent.wait();
-
-                // Now we have the data, let us do something with it
-                // in a critical way to first approximtion
-                for (int b = 0; b < BUFFER_SIZE; b++) {
-                    const double tmp = results[i][b];
-                    const double tmp2 = tmp*tmp;
-                    res += tmp;
-                    res2 += tmp2;
-                    const int bdx = b*n_dim;
-                    for (int j = 0; j < n_dim; j++) {
-                        const int idx = indexes[i][bdx+j];
-                        arr_res2[j][idx] += tmp2;
-                    }
-                }
-            }
-        } 
+        vector<cl::Event> all_events(1);
+        // Launch the kernel
+        err = q.enqueueNDRangeKernel(kernel, cl::NullRange, cl::NDRange(max_device_threads), cl::NullRange, NULL, &all_events[0]);
+        // Copy the result from the device
+        err = q.enqueueMigrateMemObjects({buffer_all_res, buffer_arr_res2}, CL_MIGRATE_MEM_OBJECT_HOST, &all_events); 
         q.finish();
-        // At this point we have collected all the results we need to recompute the grid so let's go
+
+        double res = 0.;
+        double res2 = 0.;
+        for (int i = 0; i < max_device_threads; i++) {
+            res += all_res[i];
+            const int idx_t = i*BINS_MAX*n_dim;
+            for (int j = 0; j < BINS_MAX; j++) {
+                const int idx_b = idx_t + j*n_dim;
+                res2 += arr_res2[idx_b];
+            }
+        }
+
         const double err_tmp2 = max((n_events*res2 - res*res)/(n_events-1.0), 1e-30);
         const double sigma_tmp = sqrt(err_tmp2);
         printf("For iteration %d, result: %1.5f +- %1.5f\n", k+1, res, sigma_tmp);
@@ -230,11 +170,17 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         total_weight += wgt_tmp;
 
         for (int j = 0; j < n_dim; j ++)
-            refine_grid(arr_res2[j].data(), &divisions[j*BINS_MAX]);
+            refine_grid(&arr_res2[j*BINS_MAX], &divisions[j*BINS_MAX]);
 
-        *vegas_result = total_res/total_weight;
-        *sigma = sqrt(1.0/total_weight);
+        if ( k != n_iter ) {
+            // If we are still doing the integration, rewrite the divisions buffer
+            // OPENCL will ensure this is a blocking call so no need to worry about saving events or whatever
+            q.enqueueWriteBuffer(buffer_divisions, CL_TRUE, 0, sizeof(double)*div_size, divisions.data());
+        }
     }
+
+    *final_result = total_res/total_weight;
+    *sigma = sqrt(1.0/total_weight);
 
     return 0;
 }

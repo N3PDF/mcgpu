@@ -1,8 +1,8 @@
 .PHONY: help
 
 # Running options
-EVENTS=10000000
-DIMENSIONS=7
+EVENTS=1000
+DIMENSIONS=4
 TARGET:=sw_emu
 PROFILE:=no
 DEBUG:=no
@@ -11,6 +11,9 @@ DEVICE:=xilinx_u280_xdma_201910_1
 ECHO:= @echo
 help::
 	$(ECHO) "Makefile Usage:"
+	$(ECHO) "  make run-gpu"
+	$(ECHO) "      compiles and run the CPP program in GPU"
+	$(ECHO) ""
 	$(ECHO) "  make run-cpu"
 	$(ECHO) "      compiles and run the CPP program in CPU"
 	$(ECHO) ""
@@ -40,6 +43,7 @@ help::
 	$(ECHO) ""
 
 # Compiler selection
+PYTHON = python3
 CXX = g++
 CXXFLAGS = -lOpenCL -Wall -std=c++14
 ifeq ($(DEBUG), yes)
@@ -176,10 +180,16 @@ endif
 $(TARGET_CPP): $(HOST_SRCS)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
-.PHONY: run-gpu run-cpu
+.PHONY: run-gpu run-python run-cpu
 
 run-cpu: $(TARGET_CPP)
 	./$(TARGET_CPP) $(EVENTS) $(DIMENSIONS) $(KERNEL_SRC) 2
+
+run-gpu: $(TARGET_CPP)
+	./$(TARGET_CPP) $(EVENTS) $(DIMENSIONS) $(KERNEL_SRC) 0
+
+run-python:
+	$(PYTHON) vegas_mc_pyopencl.py -n $(EVENTS) -d $(DIMENSIONS)
 
 # Cleaning stuff
 RMDIR=rm -rf
