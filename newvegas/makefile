@@ -58,8 +58,9 @@ XOCC = $(XILINX_SDX)/bin/xocc
 TARGET_CPP = cpp-opencl
 XCLBIN = ./xclbin
 KERNEL_SRC = kernel.cl
-KERNEL_NAMES = events_kernel # generate_random_array_kernel
-KERNEL_BINS = $(addprefix $(XCLBIN)/$(TARGET)_, $(addsuffix .xo, $(KERNEL_NAMES)))
+KERNEL_NAME = events_kernel
+# generate_random_array_kernel
+KERNEL_BINS = $(addprefix $(XCLBIN)/$(TARGET)_, $(addsuffix .xo, $(KERNEL_NAME)))
 
 # C source files
 HOST_SRCS = host.cc mccl.cc
@@ -100,6 +101,11 @@ EMCONFIG_DIR = $(XCLBIN)/$(DSA)
 BINARY_CONTAINERS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
 BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 
+### In order to use dataflow, every array needs to be explicitly attached to a different membank
+KERNEL=$(KERNEL_NAME)
+CLFLAGS += --max_memory_ports $(KERNEL)
+LDCLFLAGS += --sp $(KERNEL)_1.divisions_in:HBM[0] --sp $(KERNEL)_1.randoms_in:DDR[0]
+LDCLFLAGS += --sp $(KERNEL)_1.results_out:HBM[1] --sp $(KERNEL)_1.indexes_out:DDR[1]
 ##########################
 
 #Generates profile summary report
@@ -145,12 +151,12 @@ build: $(BINARY_CONTAINERS)
 $(XCLBIN)/$(TARGET)_%.xo: $(KERNEL_SRC)
 	@echo > Compiling opencl source
 	@mkdir -p $(XCLBIN)
-	@$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k $* -I'$(<D)' -o'$@' '$<'
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k $* -I'$(<D)' -o'$@' '$<'
 
 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
 	@echo > Building binary kernel for $(TARGET)
 	@mkdir -p $(XCLBIN)
-	@$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) -o'$@' $(+)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL_NAME):1 -o'$@' $(+)
 
 # $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
 # 	mkdir -p $(XCLBIN)
