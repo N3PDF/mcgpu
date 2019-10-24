@@ -26,14 +26,16 @@ __attribute__((xcl_pipeline_loop(1)))
     }
 }
 
-void write_indexes(const short arrin[BUFFER_SIZE*MAXDIM], const int n_dim, __global short *arrout) {
+void write_indexes(const short arrin[BUFFER_SIZE][MAXDIM], const int n_dim, __global short *arrout) {
 #ifdef FPGABUILD
 __attribute__((xcl_pipeline_loop(1)))
 #endif
-    const int jmax = BUFFER_SIZE*n_dim;
-    for (int j = 0; j < MAXDIM*BUFFER_SIZE; j++) {
-        if (j >= jmax) break;
-        arrout[j] = arrin[j];
+    for(int b = 0; b < BUFFER_SIZE; b++) {
+        const int bdx = n_dim*b;
+        for (int j = 0; j < MAXDIM; j++) {
+            if (j >= n_dim) break;
+            arrout[bdx+j] = arrin[b][j];
+        }
     }
 }
 

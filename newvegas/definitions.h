@@ -4,8 +4,8 @@
 #define ALPHA 0.1
 
 // OCL arrays
-#define BUFFER_SIZE 10
-#define MAXDIM 20
+#define BUFFER_SIZE 5
+#define MAXDIM 10
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846

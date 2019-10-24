@@ -183,7 +183,7 @@ $(TARGET_CPP): $(HOST_SRCS)
 .PHONY: run-gpu run-python run-cpu
 
 run-cpu: $(TARGET_CPP)
-	./$(TARGET_CPP) $(EVENTS) $(DIMENSIONS) $(KERNEL_SRC) 0
+	./$(TARGET_CPP) $(EVENTS) $(DIMENSIONS) $(KERNEL_SRC) 2
 
 run-gpu: $(TARGET_CPP)
 	./$(TARGET_CPP) $(EVENTS) $(DIMENSIONS) $(KERNEL_SRC) 0
