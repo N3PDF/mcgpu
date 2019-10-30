@@ -69,7 +69,8 @@ void refine_grid(const vector<double> &res_sq, double *subdivisions){
 
 int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events_raw, double *final_result, double *sigma) {
 
-    const int n_threads = 1;
+    const int n_threads = 2;
+    const string kernel_name = "events_kernel";
 
     // 1. Needs to decide how many threads are going to be open in total
     // and how many events each thread is going to have
@@ -119,6 +120,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
     vector<cl::Kernel> kernel(n_threads);
 
+    #pragma omp parallel for
     for (int t = 0; t < n_threads; t++) {
         randoms[t] = aligned_vector<double>(BUFFER_SIZE*n_dim); // in
         results[t] = aligned_vector<double>(BUFFER_SIZE); // out
@@ -130,14 +132,13 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
         if (err) {
             cout << "ERROR creating buffers for thread " << t << endl;
-            return -1;
         }
 
         // Read the kernel out of the program
-        kernel[t] = cl::Kernel(program, "events_kernel", &err);
+        const string cuname = kernel_name + ":{" + kernel_name + "_" + to_string(t+1) + "}";
+        kernel[t] = cl::Kernel(program, cuname.c_str(), &err);
         if (err) {
             cout << "ERROR reading kernel" << endl;
-            return -1;
         }
 
 
@@ -150,11 +151,11 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         err = kernel[t].setArg(narg++, b_indexes[t]);
         if (err) {
             cout << "ERROR setting kernel arguments" << endl;
-            return -1;
         }
+
+        // a. generate the initial bunch of random numbers
+        random_bunch(randoms[t], n_dim);
     }
-
-
 
 
     double total_res = 0.0;
@@ -165,20 +166,24 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         double res2 = 0.0;
         // Copy the divisions to the buffer, this is constant for all kernels so only need to be done once
         err = q.enqueueWriteBuffer(b_divisions, CL_TRUE, 0, sizeof(double)*BINS_MAX*n_dim, divisions.data());
+        #pragma omp parallel for
         for (int t = 0; t < n_threads; t++) {
             for (int i = 0; i < n_kernels; i++) {
-                cl::Event revent;
+                cl::Event revent, webent;
                 vector<cl::Event> kevent(1);
-                // a. generate a bunch of randoms numbers
-                random_bunch(randoms[t], n_dim);
 
                 // b. now copy them to device 
-                err = q.enqueueWriteBuffer(b_randoms[t], CL_TRUE, 0, sizeof(double)*BUFFER_SIZE*n_dim, randoms[t].data());
+                err = q.enqueueWriteBuffer(b_randoms[t], CL_TRUE, 0, sizeof(double)*BUFFER_SIZE*n_dim, randoms[t].data(), NULL, &webent);
                 if (err) cout << "ERROR writing randoms to device " << endl;
 
                 // c. launch the kernel
                 err = q.enqueueTask(kernel[t], NULL, &kevent[0]);
                 if (err) cout << "ERROR launching the kernel" << endl;
+
+
+                // c-parallel: generate the next bunch of random numbers once we have copied the previous one
+                // webent.wait(); // in principle not needed because of the CL_TRUE
+                random_bunch(randoms[t], n_dim);
 
                 // d. retrieve the data
                 err = q.enqueueMigrateMemObjects({b_results[t], b_indexes[t]}, CL_MIGRATE_MEM_OBJECT_HOST, &kevent, &revent);
@@ -205,6 +210,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                         arr_res2[j][idx] += tmp2;
                     }
                 }
+
             }
         }
         q.finish();

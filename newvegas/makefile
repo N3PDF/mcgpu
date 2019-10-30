@@ -1,7 +1,7 @@
 .PHONY: help
 
 # Running options
-EVENTS=1000
+EVENTS=5000
 DIMENSIONS=4
 TARGET:=sw_emu
 PROFILE:=no
@@ -45,7 +45,7 @@ help::
 # Compiler selection
 PYTHON = python3
 CXX = g++
-CXXFLAGS = -lOpenCL -Wall -std=c++14
+CXXFLAGS = -lOpenCL -Wall -std=c++14 -fopenmp
 ifeq ($(DEBUG), yes)
 CXXFLAGS += -Og -g
 else
@@ -106,6 +106,8 @@ KERNEL=$(KERNEL_NAME)
 CLFLAGS += --max_memory_ports $(KERNEL)
 LDCLFLAGS += --sp $(KERNEL)_1.divisions_in:HBM[0] --sp $(KERNEL)_1.randoms_in:DDR[0]
 LDCLFLAGS += --sp $(KERNEL)_1.results_out:HBM[1] --sp $(KERNEL)_1.indexes_out:DDR[1]
+LDCLFLAGS += --sp $(KERNEL)_2.divisions_in:HBM[0] --sp $(KERNEL)_1.randoms_in:DDR[0]
+LDCLFLAGS += --sp $(KERNEL)_2.results_out:HBM[3] --sp $(KERNEL)_1.indexes_out:DDR[1]
 ##########################
 
 #Generates profile summary report
@@ -156,7 +158,7 @@ $(XCLBIN)/$(TARGET)_%.xo: $(KERNEL_SRC)
 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
 	@echo > Building binary kernel for $(TARGET)
 	@mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL_NAME):1 -o'$@' $(+)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL_NAME):2 -o'$@' $(+)
 
 # $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
 # 	mkdir -p $(XCLBIN)
