@@ -69,7 +69,7 @@ void refine_grid(const vector<double> &res_sq, double *subdivisions){
 
 int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events_raw, double *final_result, double *sigma) {
 
-    const int n_threads = 2;
+    const int n_threads = 1;
     const string kernel_name = "events_kernel";
 
     // 1. Needs to decide how many threads are going to be open in total
@@ -138,10 +138,14 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         }
 
         // Read the kernel out of the program
+#ifdef FPGABUILD
         const string cuname = kernel_name + ":{" + kernel_name + "_" + to_string(t+1) + "}";
+#else
+        const string cuname = kernel_name;
+#endif
         kernel[t] = cl::Kernel(program, cuname.c_str(), &err);
         if (err) {
-            cout << "ERROR reading kernel" << endl;
+            cout << "ERROR reading kernel: " << cuname << endl;
         }
 
 
@@ -157,6 +161,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         }
 
     }
+    if(err) return -1;
 
 
     double total_res = 0.0;
@@ -169,6 +174,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         err = q.enqueueWriteBuffer(b_divisions, CL_TRUE, 0, sizeof(double)*BINS_MAX*n_dim, divisions.data());
         #pragma omp parallel for
         for (int t = 0; t < n_threads; t++) {
+            if (err) continue;
             for (int i = 0; i < n_kernels; i++) {
                 cl::Event revent, webent;
                 vector<cl::Event> kevent(1);
@@ -200,6 +206,8 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                 if (err) cout << "Error reading indexes " << endl;
 #endif
 
+                if (err) break;
+
                 // f. accumulate results (thread private or separate by thread)
                 #pragma omp critical
                 {
@@ -208,9 +216,9 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                         const double tmp2 = pow(tmp, 2);
                         res += tmp;
                         res2 += tmp2;
-                        const int bdx = b*n_dim;
                         for (int j = 0; j < n_dim; j++) {
-                            const short idx = indexes[t][bdx + j];
+                            const int jdx = j*BUFFER_SIZE + b;
+                            const short idx = indexes[t][jdx];
                             arr_res2[j][idx] += tmp2;
                         }
                     }
@@ -220,6 +228,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
             }
         }
         q.finish();
+        if (err) return -1;
 
         // 7. Time to recompute the grid dim by dim
         for (int j = 0; j < n_dim; j++) {

@@ -1,7 +1,7 @@
 .PHONY: help
 
 # Running options
-EVENTS=5000
+EVENTS=4000
 DIMENSIONS=4
 TARGET:=sw_emu
 PROFILE:=no
