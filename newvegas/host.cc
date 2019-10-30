@@ -126,7 +126,10 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         results[t] = aligned_vector<double>(BUFFER_SIZE); // out
         indexes[t] = aligned_vector<short>(BUFFER_SIZE*n_dim); // out
 
-        b_randoms[t] = cl::Buffer(context, CL_MEM_READ_ONLY, sizeof(double)*BUFFER_SIZE*n_dim);
+        // generate the initial bunch of random numbers and start by copying them to the device
+        random_bunch(randoms[t], n_dim);
+
+        b_randoms[t] = cl::Buffer(context, CL_MEM_COPY_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double)*BUFFER_SIZE*n_dim, randoms[t].data(), &err);
         b_results[t] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double)*BUFFER_SIZE, results[t].data(), &err);
         b_indexes[t] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(short)*BUFFER_SIZE*n_dim, indexes[t].data(), &err);
 
@@ -153,8 +156,6 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
             cout << "ERROR setting kernel arguments" << endl;
         }
 
-        // a. generate the initial bunch of random numbers
-        random_bunch(randoms[t], n_dim);
     }
 
 
@@ -172,45 +173,50 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                 cl::Event revent, webent;
                 vector<cl::Event> kevent(1);
 
-                // b. now copy them to device 
-                err = q.enqueueWriteBuffer(b_randoms[t], CL_TRUE, 0, sizeof(double)*BUFFER_SIZE*n_dim, randoms[t].data(), NULL, &webent);
-                if (err) cout << "ERROR writing randoms to device " << endl;
-
-                // c. launch the kernel
+                // a. launch the kernel
                 err = q.enqueueTask(kernel[t], NULL, &kevent[0]);
                 if (err) cout << "ERROR launching the kernel" << endl;
 
-
-                // c-parallel: generate the next bunch of random numbers once we have copied the previous one
-                // webent.wait(); // in principle not needed because of the CL_TRUE
-                random_bunch(randoms[t], n_dim);
-
-                // d. retrieve the data
+                // b. launch the retrieval of data 
                 err = q.enqueueMigrateMemObjects({b_results[t], b_indexes[t]}, CL_MIGRATE_MEM_OBJECT_HOST, &kevent, &revent);
                 if (err) cout << "ERROR reading data from device " << endl;
-                revent.wait();
 
+                // c // {a, c}: generate the new bunch of random data 
+                if (k != n_iter && i != n_kernels) { // no more randoms are needed
+                    random_bunch(randoms[t], n_dim);
+
+                    // d // {b, future}: enqueue the copy of data to the device for when the kernel has finished running
+                    err = q.enqueueWriteBuffer(b_randoms[t], CL_FALSE, 0, sizeof(double)*BUFFER_SIZE*n_dim, randoms[t].data(), &kevent, &webent);
+                    if (err) cout << "ERROR writing randoms to device " << endl;
+                }
+
+                // e. wait until the copy of data has finished to beging accumulation of results
+                revent.wait();
+#ifndef FPGABUILD
                 // TODO: this is not necessary in FPGA but it is in CPU??
                 err = q.enqueueReadBuffer(b_results[t], CL_TRUE, 0, sizeof(double)*BUFFER_SIZE, results[t].data());
                 if (err) cout << "Error reading resuts " << endl;
                 err = q.enqueueReadBuffer(b_indexes[t], CL_TRUE, 0, sizeof(short)*BUFFER_SIZE*n_dim, indexes[t].data());
                 if (err) cout << "Error reading indexes " << endl;
+#endif
 
-                // e. accumulate results (thread private or separate by thread)
-                // but I am hoping not to be this the bottleneck, privateness 
-                // should not matter
-                for (int b = 0; b < BUFFER_SIZE; b++) {
-                    const double tmp = results[t][b];
-                    const double tmp2 = pow(tmp, 2);
-                    res += tmp;
-                    res2 += tmp2;
-                    const int bdx = b*n_dim;
-                    for (int j = 0; j < n_dim; j++) {
-                        const short idx = indexes[t][bdx + j];
-                        arr_res2[j][idx] += tmp2;
+                // f. accumulate results (thread private or separate by thread)
+                #pragma omp critical
+                {
+                    for (int b = 0; b < BUFFER_SIZE; b++) {
+                        const double tmp = results[t][b];
+                        const double tmp2 = pow(tmp, 2);
+                        res += tmp;
+                        res2 += tmp2;
+                        const int bdx = b*n_dim;
+                        for (int j = 0; j < n_dim; j++) {
+                            const short idx = indexes[t][bdx + j];
+                            arr_res2[j][idx] += tmp2;
+                        }
                     }
-                }
+                } // end critical
 
+                if (k != n_iter && i != n_kernels) webent.wait(); 
             }
         }
         q.finish();
