@@ -151,9 +151,10 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
         // 5. Now prepare the event kernel with the appropiate variables
         cl_uint narg = 0;
+        const short s_dim = (short) n_dim;
         err = kernel[t].setArg(narg++, b_divisions);
         err = kernel[t].setArg(narg++, b_randoms[t]);
-        err = kernel[t].setArg(narg++, n_dim);
+        err = kernel[t].setArg(narg++, s_dim);
         err = kernel[t].setArg(narg++, b_results[t]);
         err = kernel[t].setArg(narg++, b_indexes[t]);
         if (err) {

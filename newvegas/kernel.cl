@@ -3,24 +3,23 @@
 // Include opencl files
 #include "integrand.cl"
 
-void read_divisions(__global const double *arrin, const int n_dim, double arrout[MAXDIM][BINS_MAX]) {
+void read_divisions(__global const double *arrin, const short n_dim, double arrout[MAXDIM][BINS_MAX]) {
 #ifdef FPGABUILD
     __attribute__((opencl_unroll_hint))
 #endif
-    for (int j = 0 ; j < MAXDIM; j ++ ) {
-        if (j >= n_dim) break;
-        const int idx = j*BINS_MAX;
-        for (int k = 0; k < BINS_MAX; k++) {
+    for (short j = 0 ; j < MAXDIM; j ++ ) {
+        const short idx = j*BINS_MAX;
+        for (short k = 0; k < BINS_MAX; k++) {
             arrout[j][k] = arrin[idx+k];
         }
     }
 }
 
-void read_randoms(__global const double *arrin, const int jdim, double arrout[BUFFER_SIZE][MAXDIM]) {
+void read_randoms(__global const double *arrin, const short jdim, double arrout[BUFFER_SIZE][MAXDIM]) {
 #ifdef FPGABUILD
 __attribute__((xcl_pipeline_loop(1)))
 #endif
-    for (int b = 0; b < BUFFER_SIZE; b++) {
+    for (short b = 0; b < BUFFER_SIZE; b++) {
         arrout[b][jdim] = arrin[b];
     }
 }
@@ -29,7 +28,7 @@ void write_indexes(const short arrin[BUFFER_SIZE], __global short *arrout) {
 #ifdef FPGABUILD
 __attribute__((xcl_pipeline_loop(1)))
 #endif
-    for(int b = 0; b < BUFFER_SIZE; b++) {
+    for(short b = 0; b < BUFFER_SIZE; b++) {
         arrout[b] = arrin[b];
     }
 }
@@ -38,7 +37,7 @@ void write_results(const double arrin[BUFFER_SIZE], __global double arrout[BUFFE
 #ifdef FPGABUILD
 __attribute__((xcl_pipeline_loop(1)))
 #endif
-    for (int b = 0; b < BUFFER_SIZE; b++) {
+    for (short b = 0; b < BUFFER_SIZE; b++) {
         arrout[b] = arrin[b];
     }
 }
@@ -46,16 +45,15 @@ __attribute__((xcl_pipeline_loop(1)))
 #define reg_i 0.0
 #define reg_f 1.0
 void digest_random(const double divisions[MAXDIM][BINS_MAX], const double randoms[BUFFER_SIZE][MAXDIM],
-        const int n_dim,
+        const short n_dim,
         double vegas_rand[BUFFER_SIZE][MAXDIM], short indexes[MAXDIM][BUFFER_SIZE], double wgts[BUFFER_SIZE]) {
     // Not clear at all in which order it is better to write these loops
 #ifdef FPGABUILD
 __attribute__((xcl_pipeline_loop(1)))
 #endif
-    for (int b = 0; b < BUFFER_SIZE; b++) {
+    for (short b = 0; b < BUFFER_SIZE; b++) {
         double wgt = 1.0;
-        for (int j = 0; j < MAXDIM; j++) { 
-            if (j >= n_dim) break;
+        for (short j = 0; j < MAXDIM; j++) { 
             const double rn = randoms[b][j];
             const double xn = BINS_MAX*(1.0 - rn);
             short int_xn = (short) max(0, min( (int) xn, BINS_MAX));
@@ -75,12 +73,12 @@ __attribute__((xcl_pipeline_loop(1)))
 }
 
 void integrand_computer(const double randoms[BUFFER_SIZE][MAXDIM], const double wgts[BUFFER_SIZE],
-        const int n_dim,
+        const short n_dim,
         double results[BUFFER_SIZE]) {
 #ifdef FPGABUILD
 __attribute__((xcl_pipeline_loop(1)))
 #endif
-    for (int b = 0; b < BUFFER_SIZE; b++) {
+    for (short b = 0; b < BUFFER_SIZE; b++) {
         double tmp = integrand(n_dim, randoms[b]);
         results[b] = wgts[b]*tmp;
     }
@@ -95,7 +93,7 @@ __attribute__((reqd_work_group_size(1,1,1)))
 __attribute__((xcl_dataflow))
 #endif
 void events_kernel(__global const double *divisions_in, __global const double *randoms_in, 
-        const int n_dim,
+        const short n_dim,
         __global double results_out[BUFFER_SIZE], __global short *indexes_out) {
 
     // Step 0. Allocate local arrays to store results
@@ -112,8 +110,7 @@ void events_kernel(__global const double *divisions_in, __global const double *r
     // BUFFER-loop functions
 
     // Step 2. Buffer reads
-    for (int j = 0; j < MAXDIM; j++) {
-        if (j >= n_dim) break;
+    for (short j = 0; j < MAXDIM; j++) {
         const jdx = j*BUFFER_SIZE;
         read_randoms(&randoms_in[jdx], j, randoms);
     }
@@ -126,8 +123,7 @@ void events_kernel(__global const double *divisions_in, __global const double *r
 
     // Step 4. Copy out the div indexex (note that this one does not depend in step 3
     // and hopefully will happen in parallel)
-    for (int j = 0; j < MAXDIM; j++) {
-        if (j >= n_dim) break;
+    for (short j = 0; j < MAXDIM; j++) {
         const jdx = j*BUFFER_SIZE;
         write_indexes(indexes[j], &indexes_out[jdx]);
     }
