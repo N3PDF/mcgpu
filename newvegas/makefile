@@ -109,11 +109,11 @@ LDCLFLAGS += --sp $(KERNEL)_1.results_out:HBM[1] --sp $(KERNEL)_1.indexes_out:DD
 LDCLFLAGS += --sp $(KERNEL)_2.divisions_in:HBM[0] --sp $(KERNEL)_2.randoms_in:DDR[0]
 LDCLFLAGS += --sp $(KERNEL)_2.results_out:HBM[2] --sp $(KERNEL)_2.indexes_out:DDR[1]
 
-LDCLFLAGS += --sp $(KERNEL)_3.divisions_in:HBM[0] --sp $(KERNEL)_3.randoms_in:HBM[5]
-LDCLFLAGS += --sp $(KERNEL)_3.results_out:HBM[3] --sp $(KERNEL)_3.indexes_out:HBM[6]
-LDCLFLAGS += --sp $(KERNEL)_4.divisions_in:HBM[0] --sp $(KERNEL)_4.randoms_in:HBM[7]
-LDCLFLAGS += --sp $(KERNEL)_4.results_out:HBM[4] --sp $(KERNEL)_4.indexes_out:HBM[8]
-##########################
+# LDCLFLAGS += --sp $(KERNEL)_3.divisions_in:HBM[0] --sp $(KERNEL)_3.randoms_in:HBM[5]
+# LDCLFLAGS += --sp $(KERNEL)_3.results_out:HBM[3] --sp $(KERNEL)_3.indexes_out:HBM[6]
+# LDCLFLAGS += --sp $(KERNEL)_4.divisions_in:HBM[0] --sp $(KERNEL)_4.randoms_in:HBM[7]
+# LDCLFLAGS += --sp $(KERNEL)_4.results_out:HBM[4] --sp $(KERNEL)_4.indexes_out:HBM[8]
+# ##########################
 
 #Generates profile summary report
 ifeq ($(PROFILE), yes)
@@ -163,7 +163,7 @@ $(XCLBIN)/$(TARGET)_%.xo: $(KERNEL_SRC)
 $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
 	@echo > Building binary kernel for $(TARGET)
 	@mkdir -p $(XCLBIN)
-	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL_NAME):4 -o'$@' $(+)
+	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL_NAME):2 -o'$@' $(+)
 
 # $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
 # 	mkdir -p $(XCLBIN)
