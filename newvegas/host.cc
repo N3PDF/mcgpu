@@ -73,7 +73,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         cout << "In order to change the number of dimensions from " << MAXDIM << " you need to recompile the code changing definitions.h" << endl;
     }
 
-    const int n_threads = 1;
+    const int n_threads = 4;
     const string kernel_name = "events_kernel";
 
     // 1. Needs to decide how many threads are going to be open in total
