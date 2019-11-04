@@ -69,6 +69,10 @@ void refine_grid(const vector<double> &res_sq, double *subdivisions){
 
 int vegas(std::string kernel_file, const int device_idx, const int warmup, const int n_dim, const int n_iter, const int n_events_raw, double *final_result, double *sigma) {
 
+    if (n_dim != MAXDIM) {
+        cout << "In order to change the number of dimensions from " << MAXDIM << " you need to recompile the code changing definitions.h" << endl;
+    }
+
     const int n_threads = 1;
     const string kernel_name = "events_kernel";
 
@@ -81,14 +85,14 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     const int n_events = n_kernels*n_threads*BUFFER_SIZE; // make sure the number of events is a multiple of the number of threads and BUFFER_SIZE
 
     // 2. Initialize host-side device-usable variables 
-    aligned_vector<double> divisions(n_dim*BINS_MAX);
-    vector<vector<double>> arr_res2(n_dim, vector<double>(BINS_MAX));
+    aligned_vector<double> divisions(MAXDIM*BINS_MAX);
+    vector<vector<double>> arr_res2(MAXDIM, vector<double>(BINS_MAX));
 
     // 3. Initialize integration (fake init)
     srand(0);
     const double xjac = 1.0/n_events;
     vector<double> rw_tmp(BINS_MAX, 1.0); // fake init
-    for (int j = 0; j < n_dim; j++) {
+    for (int j = 0; j < MAXDIM; j++) {
         divisions[j*BINS_MAX] = 1.0;
         rebin(rw_tmp, 1.0/BINS_MAX, &divisions[j*BINS_MAX]);
     }
@@ -114,7 +118,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
     vector<aligned_vector<double>> results(n_threads);
     vector<aligned_vector<short>> indexes(n_threads);
 
-    cl::Buffer b_divisions(context, CL_MEM_READ_ONLY, sizeof(double)*n_dim*BINS_MAX); // in
+    cl::Buffer b_divisions(context, CL_MEM_READ_ONLY, sizeof(double)*MAXDIM*BINS_MAX); // in
     vector<cl::Buffer> b_randoms(n_threads),
         b_results(n_threads), b_indexes(n_threads);
 
@@ -122,16 +126,16 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
     #pragma omp parallel for
     for (int t = 0; t < n_threads; t++) {
-        randoms[t] = aligned_vector<double>(BUFFER_SIZE*n_dim); // in
+        randoms[t] = aligned_vector<double>(BUFFER_SIZE*MAXDIM); // in
         results[t] = aligned_vector<double>(BUFFER_SIZE); // out
-        indexes[t] = aligned_vector<short>(BUFFER_SIZE*n_dim); // out
+        indexes[t] = aligned_vector<short>(BUFFER_SIZE*MAXDIM); // out
 
         // generate the initial bunch of random numbers and start by copying them to the device
-        random_bunch(randoms[t], n_dim);
+        random_bunch(randoms[t], MAXDIM);
 
-        b_randoms[t] = cl::Buffer(context, CL_MEM_COPY_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double)*BUFFER_SIZE*n_dim, randoms[t].data(), &err);
+        b_randoms[t] = cl::Buffer(context, CL_MEM_COPY_HOST_PTR | CL_MEM_READ_ONLY, sizeof(double)*BUFFER_SIZE*MAXDIM, randoms[t].data(), &err);
         b_results[t] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(double)*BUFFER_SIZE, results[t].data(), &err);
-        b_indexes[t] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(short)*BUFFER_SIZE*n_dim, indexes[t].data(), &err);
+        b_indexes[t] = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, sizeof(short)*BUFFER_SIZE*MAXDIM, indexes[t].data(), &err);
 
         if (err) {
             cout << "ERROR creating buffers for thread " << t << endl;
@@ -151,10 +155,8 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
         // 5. Now prepare the event kernel with the appropiate variables
         cl_uint narg = 0;
-        const short s_dim = (short) n_dim;
         err = kernel[t].setArg(narg++, b_divisions);
         err = kernel[t].setArg(narg++, b_randoms[t]);
-        err = kernel[t].setArg(narg++, s_dim);
         err = kernel[t].setArg(narg++, b_results[t]);
         err = kernel[t].setArg(narg++, b_indexes[t]);
         if (err) {
@@ -172,7 +174,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         double res = 0.0;
         double res2 = 0.0;
         // Copy the divisions to the buffer, this is constant for all kernels so only need to be done once
-        err = q.enqueueWriteBuffer(b_divisions, CL_TRUE, 0, sizeof(double)*BINS_MAX*n_dim, divisions.data());
+        err = q.enqueueWriteBuffer(b_divisions, CL_TRUE, 0, sizeof(double)*BINS_MAX*MAXDIM, divisions.data());
         #pragma omp parallel for
         for (int t = 0; t < n_threads; t++) {
             if (err) continue;
@@ -190,10 +192,10 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
 
                 // c // {a, c}: generate the new bunch of random data 
                 if (k != n_iter && i != n_kernels) { // no more randoms are needed
-                    random_bunch(randoms[t], n_dim);
+                    random_bunch(randoms[t], MAXDIM);
 
                     // d // {b, future}: enqueue the copy of data to the device for when the kernel has finished running
-                    err = q.enqueueWriteBuffer(b_randoms[t], CL_FALSE, 0, sizeof(double)*BUFFER_SIZE*n_dim, randoms[t].data(), &kevent, &webent);
+                    err = q.enqueueWriteBuffer(b_randoms[t], CL_FALSE, 0, sizeof(double)*BUFFER_SIZE*MAXDIM, randoms[t].data(), &kevent, &webent);
                     if (err) cout << "ERROR writing randoms to device " << endl;
                 }
 
@@ -203,7 +205,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                 // TODO: this is not necessary in FPGA but it is in CPU??
                 err = q.enqueueReadBuffer(b_results[t], CL_TRUE, 0, sizeof(double)*BUFFER_SIZE, results[t].data());
                 if (err) cout << "Error reading resuts " << endl;
-                err = q.enqueueReadBuffer(b_indexes[t], CL_TRUE, 0, sizeof(short)*BUFFER_SIZE*n_dim, indexes[t].data());
+                err = q.enqueueReadBuffer(b_indexes[t], CL_TRUE, 0, sizeof(short)*BUFFER_SIZE*MAXDIM, indexes[t].data());
                 if (err) cout << "Error reading indexes " << endl;
 #endif
 
@@ -217,7 +219,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                         const double tmp2 = pow(tmp, 2);
                         res += tmp;
                         res2 += tmp2;
-                        for (int j = 0; j < n_dim; j++) {
+                        for (int j = 0; j < MAXDIM; j++) {
                             const int jdx = j*BUFFER_SIZE + b;
                             const short idx = indexes[t][jdx];
                             arr_res2[j][idx] += tmp2;
@@ -232,7 +234,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         if (err) return -1;
 
         // 7. Time to recompute the grid dim by dim
-        for (int j = 0; j < n_dim; j++) {
+        for (int j = 0; j < MAXDIM; j++) {
             refine_grid(arr_res2[j], &divisions[j*BINS_MAX]);
         }
 
