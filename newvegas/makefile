@@ -104,10 +104,10 @@ BINARY_CONTAINER_bitstream_OBJS += $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo
 ### In order to use dataflow, every array needs to be explicitly attached to a different membank
 KERNEL=$(KERNEL_NAME)
 CLFLAGS += --max_memory_ports $(KERNEL)
-LDCLFLAGS += --sp $(KERNEL)_1.divisions_in:HBM[0] --sp $(KERNEL)_1.randoms_in:DDR[0]
-LDCLFLAGS += --sp $(KERNEL)_1.results_out:HBM[1] --sp $(KERNEL)_1.indexes_out:DDR[1]
-LDCLFLAGS += --sp $(KERNEL)_2.divisions_in:HBM[0] --sp $(KERNEL)_2.randoms_in:DDR[0]
-LDCLFLAGS += --sp $(KERNEL)_2.results_out:HBM[2] --sp $(KERNEL)_2.indexes_out:DDR[1]
+LDCLFLAGS += --sp $(KERNEL)_1.divisions_in:HBM[0] --sp $(KERNEL)_1.randoms_in:HBM[3]
+LDCLFLAGS += --sp $(KERNEL)_1.results_out:HBM[1] --sp $(KERNEL)_1.indexes_out:HBM[4]
+LDCLFLAGS += --sp $(KERNEL)_2.divisions_in:HBM[0] --sp $(KERNEL)_2.randoms_in:HBM[5]
+LDCLFLAGS += --sp $(KERNEL)_2.results_out:HBM[2] --sp $(KERNEL)_2.indexes_out:HBM[6]
 
 # LDCLFLAGS += --sp $(KERNEL)_3.divisions_in:HBM[0] --sp $(KERNEL)_3.randoms_in:HBM[5]
 # LDCLFLAGS += --sp $(KERNEL)_3.results_out:HBM[3] --sp $(KERNEL)_3.indexes_out:HBM[6]
