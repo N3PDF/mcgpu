@@ -73,7 +73,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
         cout << "In order to change the number of dimensions from " << MAXDIM << " you need to recompile the code changing definitions.h" << endl;
     }
 
-    const int n_threads = 2;
+    const int n_threads = 1;
     const string kernel_name = "events_kernel";
 
     // 1. Needs to decide how many threads are going to be open in total
@@ -212,6 +212,7 @@ int vegas(std::string kernel_file, const int device_idx, const int warmup, const
                 if (err) break;
 
                 // f. accumulate results (thread private or separate by thread)
+                // this should happen at the same time the data is being copied to the FPGA
                 #pragma omp critical
                 {
                     for (int b = 0; b < BUFFER_SIZE; b++) {

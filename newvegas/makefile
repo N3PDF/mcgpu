@@ -6,7 +6,7 @@ DIMENSIONS=4
 TARGET:=sw_emu
 PROFILE:=no
 DEBUG:=no
-DEVICE:=xilinx_u280_xdma_201910_1
+DEVICE:=xilinx_u280_xdma_201920_1
 
 ECHO:= @echo
 help::
@@ -51,8 +51,8 @@ CXXFLAGS += -Og -g
 else
 CXXFLAGS += -O4
 endif
-XXX = $(XILINX_SDX)/bin/xcpp
-XOCC = $(XILINX_SDX)/bin/xocc
+XXX = g++
+XOCC = v++
 
 # Some targets
 TARGET_CPP = cpp-opencl
@@ -88,10 +88,10 @@ LDFLAGS += $(opencl_LDFLAGS)
 
 # Host compiler global settings
 CXXFLAGS += -fmessage-length=0
-LDFLAGS += -lrt -lstdc++
+LDFLAGS += -lrt -lstdc++ -lhlsmathsim
 
 # Kernel compiler global settings
-CLFLAGS += -t $(TARGET) --platform $(DEVICE) --save-temps -O3 -j 18 -D FPGABUILD
+CLFLAGS += -t $(TARGET) --platform $(DEVICE) --save-temps -O3 -j 18 -D FPGABUILD 
 
 EXECUTABLE = driver
 CMD_ARGS = $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin
@@ -107,7 +107,8 @@ CLFLAGS += --max_memory_ports $(KERNEL)
 LDCLFLAGS += --sp $(KERNEL)_1.divisions_in:HBM[0] --sp $(KERNEL)_1.randoms_in:HBM[3]
 LDCLFLAGS += --sp $(KERNEL)_1.results_out:HBM[1] --sp $(KERNEL)_1.indexes_out:HBM[4]
 LDCLFLAGS += --sp $(KERNEL)_2.divisions_in:HBM[0] --sp $(KERNEL)_2.randoms_in:HBM[5]
-LDCLFLAGS += --sp $(KERNEL)_2.results_out:HBM[2] --sp $(KERNEL)_2.indexes_out:HBM[6]
+LDCLFLAGS += --sp $(KERNEL)_2.results_out:HBM[2] --sp $(KERNEL)_2.indexes_out:HBM[6] 
+
 
 # LDCLFLAGS += --sp $(KERNEL)_3.divisions_in:HBM[0] --sp $(KERNEL)_3.randoms_in:HBM[5]
 # LDCLFLAGS += --sp $(KERNEL)_3.results_out:HBM[3] --sp $(KERNEL)_3.indexes_out:HBM[6]
@@ -124,27 +125,6 @@ endif
 ifeq ($(DEBUG), yes)
 CLFLAGS += --dk protocol:all:all:all
 endif
-
-##### if making driver or xilinx, check the correct enviromental variables are set
-#Checks for XILINX_SDX
-# ifndef XILINX_SDX
-# $(error XILINX_SDX variable is not set, please set correctly and rerun)
-# endif
-# #Checks for XILINX_XRT
-# check-xrt:
-# ifndef XILINX_XRT
-# 	$(error XILINX_XRT variable is not set, please set correctly and rerun)
-# endif
-# check-devices:
-# ifndef DEVICE
-# 	$(error DEVICE not set. Please set the DEVICE properly and rerun. Run "make help" for more details.)
-# endif
-# check-aws_repo:
-# ifndef SDACCEL_DIR
-# 	$(error SDACCEL_DIR not set. Please set it properly and rerun. Run "make help" for more details.)
-# endif
-########
-
 
 .PHONY: xilinx clean cleanall emconfig exe
 exe: $(EXECUTABLE)
@@ -164,13 +144,6 @@ $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(KERNEL_BINS)
 	@echo > Building binary kernel for $(TARGET)
 	@mkdir -p $(XCLBIN)
 	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk $(KERNEL_NAME):2 -o'$@' $(+)
-
-# $(XCLBIN)/bitstream.$(TARGET).$(DSA).xo: kernel.cl
-# 	mkdir -p $(XCLBIN)
-# 	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -c -k events_kernel -I'$(<D)' -o'$@' '$<'
-# $(XCLBIN)/bitstream.$(TARGET).$(DSA).xclbin: $(BINARY_CONTAINER_bitstream_OBJS)
-# 	mkdir -p $(XCLBIN)
-# 	$(XOCC) $(CLFLAGS) --temp_dir $(BUILD_DIR_bitstream) -l $(LDCLFLAGS) --nk events_kernel:1 -o'$@' $(+)
 
 # Building Host
 $(EXECUTABLE): $(HOST_SRCS) $(HOST_HDRS)

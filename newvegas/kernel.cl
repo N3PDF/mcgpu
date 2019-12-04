@@ -82,7 +82,6 @@ __attribute__((xcl_pipeline_loop(1)))
 }
 
 
-
 // Kernel to be run per event
 __kernel
 __attribute__((reqd_work_group_size(1,1,1)))
