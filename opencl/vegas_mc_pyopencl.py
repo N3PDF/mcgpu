@@ -1,6 +1,5 @@
 #!/usr/env python
 import time
-from integrand import MC_INTEGRAND, setup
 import numpy as np
 import numba as nb
 import pyopencl as cl
@@ -12,85 +11,11 @@ queue = cl.CommandQueue(context)
 BINS_MAX = 30
 ALPHA = 0.1
 
-kernelA = cl.Program(context, """
-__kernel void events_kernel(__global const double *all_randoms, __global const double *all_xwgts, int n, int n_events, double xjac, __global double *all_res, __global double *all_res2) {
-    int block_id = get_group_id(0);
-    int thread_id = get_local_id(0);
-    int block_size = get_local_size(0);
+f = open('kernel.cl', 'r')
+kernel_str = f.read()
+f.close()
 
-    int index = block_id*block_size + thread_id;
-    int grid_dim = get_num_groups(0);
-    int stride = block_size * grid_dim;
-
-    // shared lepage
-    double a = 0.1;
-    double pref = pow(1.0/a/sqrt(M_PI), n);
-
-    for (int i = index; i < n_events; i += stride) {
-        double wgt = all_xwgts[i]*xjac;
-
-        double coef = 0.0;
-        for (int j = 0; j < n; j++) {
-            coef += pow( (all_randoms[i*n + j] - 1.0/2.0)/a, 2 );
-        }
-        double lepage = pref*exp(-coef);
-
-        double tmp = wgt*lepage;
-        all_res[i] = tmp;
-        all_res2[i] = pow(tmp,2);
-    }
-}
-""").build()
-
-kernelB = cl.Program(context, """
-#define BINS_MAX 30
-
-double bad_rand(int* seed) // 1 <= *seed < m
-{
-    int const a = 16807; //ie 7**5
-    int const m = 2147483647; //ie 2**31-1
-
-    *seed = (int) ((long) (*seed * a))%m;
-    double rn = (double) *seed / INT_MAX;
-    return (rn + 1.0)/2.0;
-}
-
-__kernel void generate_random_array_kernel(const int n_events, const int n_dim, __global const double *divisions, __global double *all_randoms, __global double *all_wgts, __global int *all_div_indexes) {
-    double reg_i = 0.0;
-    double reg_f = 1.0;
-
-    int block_id = get_group_id(0);
-    int thread_id = get_local_id(0);
-    int block_size = get_local_size(0);
-
-    int index = block_id*block_size + thread_id;
-    int grid_dim = get_num_groups(0);
-    int stride = block_size * grid_dim;
-
-    // Use curandState_t to keep track of the seed, which is thread dependent
-    int seed = index;
-
-    for (int j = index; j < n_events; j+= stride) {
-        double wgt = 1.0;
-        for (int i = 0; i < n_dim; i++) {
-            double rn = bad_rand(&seed);
-            double xn = BINS_MAX*(1.0 - rn);
-            int int_xn = max(0, min( (int) xn, BINS_MAX));
-            double aux_rand = xn - int_xn;
-            double x_ini = 0.0;
-            if (int_xn > 0) {
-                x_ini = divisions[BINS_MAX*i + int_xn-1];
-            }
-            double xdelta = divisions[BINS_MAX*i + int_xn] - x_ini;
-            double rand_x = x_ini + xdelta*aux_rand;
-            wgt *= xdelta*BINS_MAX;
-            // Now we need to add an offset to the arrays
-            all_randoms[j*n_dim + i] = reg_i + rand_x*(reg_f - reg_i);
-            all_div_indexes[j*n_dim + i] = int_xn;
-            }
-        all_wgts[j] = wgt;
-    }
-}""").build()
+kernel = cl.Program(context, kernel_str).build()
 
 
 @nb.njit(nb.float64())
@@ -98,7 +23,7 @@ def internal_rand():
     """ Generates a random number """
     return np.random.uniform(0,1)
 
-@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.int32[:]))
+@nb.njit(nb.float64[:](nb.int64, nb.int64, nb.float64[:], nb.int16[:]))
 def loop(n_events, n_dim,  fres2, all_div_indexes):
     arr_res2 = np.zeros(n_dim * BINS_MAX)
     for i in range(n_events):
@@ -202,7 +127,7 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         # input arrays
         NN = n_dim*n_events
         all_randoms = np.empty(NN, dtype=np.float64)
-        all_div_indexes = np.zeros(NN, dtype=np.int32)
+        all_div_indexes = np.zeros(NN, dtype=np.int16)
 
         # output arrays
         all_res = pycl_array.to_device(queue, np.zeros(n_events))
@@ -214,13 +139,13 @@ def vegas(n_dim, n_iter, n_events, results, sigmas):
         cl_divisions = pycl_array.to_device(queue, divisions)
 
 
-        kernelB.generate_random_array_kernel(queue, (grid_size,), None,
+        kernel.generate_random_array_kernel(queue, (grid_size,), None,
                                              np.int32(n_events), np.int32(n_dim),
                                              cl_divisions.data, cl_all_randoms.data,
                                              cl_all_xwgts.data, cl_all_div_indexes.data)
         queue.finish()
 
-        kernelA.events_kernel(queue, (grid_size,), None,
+        kernel.events_kernel(queue, (grid_size,), None,
                               cl_all_randoms.data, cl_all_xwgts.data, np.int32(n_dim), np.int32(n_events),
                               np.float64(xjac), all_res.data, all_res2.data)
 
@@ -284,15 +209,24 @@ class make_vegas:
 
 if __name__ == '__main__':
     """Testing a basic integration"""
-    ncalls = setup['ncalls']
-    xlow = setup['xlow']
-    xupp = setup['xupp']
-    dim = setup['dim']
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument("-n", "--ncalls", help = "Number of events", default = int(1e6), type = int)
+    parser.add_argument("-i", "--niters", help = "Number of iterations", default = 5, type = int)
+    parser.add_argument("-d", "--dimensions", help = "Number of dimensions", default = 7, type = int)
+    # Not used at the moment
+    parser.add_argument("--xlow", default = 0.0, type = float)
+    parser.add_argument("--xupp", default = 1.0, type = float)
+    args = parser.parse_args()
+    ncalls = args.ncalls
+    xlow = args.xlow
+    xupp = args.xupp
+    dim = args.dimensions
 
-    print(f'VEGAS MC numba, ncalls={ncalls}:')
+    print(f'VEGAS MC numba, ncalls={ncalls}, dimensions={dim}:')
     start = time.time()
     v = make_vegas(dim=dim, xl = xlow, xu = xupp)
-    r = v.integrate(calls=ncalls)
+    r = v.integrate(calls=ncalls, iters=args.niters)
     end = time.time()
     print(r)
     print(f'time (s): {end-start}')

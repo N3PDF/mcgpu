@@ -3,3 +3,14 @@ mod/
 obj/
 *.o
 *.mod
+.Xil/
+.run
+xclbin/
+_x.sw_emu.xilinx_u280_xdma_201910_1/
+*.xo
+*.json
+*.csv
+*.log
+cpp-opencl
+driver
+*.orig
